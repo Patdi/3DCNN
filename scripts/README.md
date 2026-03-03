@@ -33,6 +33,9 @@ Useful extras:
 - `--seed`
 - `--format`
 
+## `evaluate_model.py`
+
+Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
 ## `train_voxel_cnn.py`
 
 Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
@@ -40,6 +43,28 @@ Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
 Example:
 
 ```bash
+python scripts/evaluate_model.py \
+  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
+  --manifest data/splits/test_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --output-dir outputs/runs/voxel_cnn_pretrain/eval \
+  --task residue_identity
+```
+
+Minimal required args:
+
+- `--checkpoint`
+- `--manifest`
+- `--normalization`
+- `--output-dir`
+- `--task`
+
+Useful extras:
+
+- `--num-classes`
+- `--metrics`
+- `--batch-size`
+- `--device`
 python scripts/train_voxel_cnn.py \
   --train-manifest data/splits/train_sites.csv \
   --val-manifest data/splits/val_sites.csv \
