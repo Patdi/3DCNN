@@ -36,6 +36,9 @@ Useful extras:
 ## `evaluate_model.py`
 
 Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
+## `train_voxel_cnn.py`
+
+Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
 
 Example:
 
@@ -62,3 +65,14 @@ Useful extras:
 - `--metrics`
 - `--batch-size`
 - `--device`
+python scripts/train_voxel_cnn.py \
+  --train-manifest data/splits/train_sites.csv \
+  --val-manifest data/splits/val_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --output-dir outputs/runs/voxel_cnn_pretrain \
+  --task residue_identity \
+  --num-classes 20 \
+  --epochs 30 \
+  --batch-size 32 \
+  --lr 1e-3
+```
