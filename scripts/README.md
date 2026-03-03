@@ -33,6 +33,31 @@ Useful extras:
 - `--seed`
 - `--format`
 
+
+## `compute_normalization.py`
+
+Compute train-set normalization stats from a site-level manifest and write
+`normalization_stats.npz` for training/evaluation scripts.
+
+Example:
+
+```bash
+python scripts/compute_normalization.py \
+  --manifest data/splits/train_sites.csv \
+  --out data/processed/stats/normalization_stats.npz
+```
+
+Minimal required args:
+
+- `--manifest`
+- `--out`
+
+Useful extras:
+
+- `--mode per-channel|global`
+- `--max-samples`
+- `--seed`
+
 ## `evaluate_model.py`
 
 Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
