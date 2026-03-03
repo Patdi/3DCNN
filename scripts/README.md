@@ -32,3 +32,33 @@ Useful extras:
 - `--num-workers`
 - `--seed`
 - `--format`
+
+## `evaluate_model.py`
+
+Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
+
+Example:
+
+```bash
+python scripts/evaluate_model.py \
+  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
+  --manifest data/splits/test_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --output-dir outputs/runs/voxel_cnn_pretrain/eval \
+  --task residue_identity
+```
+
+Minimal required args:
+
+- `--checkpoint`
+- `--manifest`
+- `--normalization`
+- `--output-dir`
+- `--task`
+
+Useful extras:
+
+- `--num-classes`
+- `--metrics`
+- `--batch-size`
+- `--device`
