@@ -76,3 +76,26 @@ python scripts/train_voxel_cnn.py \
   --batch-size 32 \
   --lr 1e-3
 ```
+
+## `make_splits_from_pdb_folder.py`
+
+Create `train/val/test` split files directly from a folder of PDB files.
+
+Example:
+
+```bash
+python scripts/make_splits_from_pdb_folder.py \
+  --pdb-dir data/pdbs \
+  --output-dir data/splits \
+  --method sequence-cluster \
+  --seq-identity-threshold 0.4 \
+  --write-legacy-pdb-lists
+```
+
+Outputs:
+
+- `train.txt`, `val.txt`, `test.txt`
+- `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
+- optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
+- optional materialized split folders via `--materialize symlink|copy`
+
