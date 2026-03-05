@@ -3,7 +3,7 @@
 This folder contains data preparation, training, evaluation, and dataset QA utilities.
 
 
-1. ## `make_pdb_manifest.py`
+## 1. `make_pdb_manifest.py`
 
 Build a structure-level manifest from a folder of PDB files (one row per parseable structure).
 
@@ -27,7 +27,7 @@ Useful extras:
 - `--min-residues 50`
 - `--dedupe-by-sequence`
 
-2. ## `make_splits_from_pdb_folder.py`
+## 2. `make_splits_from_pdb_folder.py`
 
 Create `train/val/test` split files directly from a folder of PDB files.
 
@@ -48,8 +48,6 @@ Outputs:
 - `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
 - Optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
 - Optional materialized split folders via `--materialize symlink|copy`
-
-
 
 ## 3. `build_voxel_dataset.py`
 
@@ -125,6 +123,7 @@ python scripts/train_voxel_cnn.py \
   --batch-size 32 \
   --lr 1e-3
 ```
+
 ## 6. `evaluate_model.py`
 
 Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
@@ -155,6 +154,27 @@ Useful extras:
 - `--batch-size`
 - `--device`
 
+## Extras:
+
+## `check_split_leakage.py`
+
+Check for duplicate records and leakage across split manifests (`train/val/test`) using one or more key columns (default: `structure_id`).
+
+Example:
+
+```bash
+python scripts/check_split_leakage.py \
+  --train data/splits/train.csv \
+  --val data/splits/val.csv \
+  --test data/splits/test.csv \
+  --check-cols structure_id
+```
+
+Useful extras:
+
+- `--allow-missing-cols`
+- `--json-out outputs/reports/split_leakage.json`
+
 
 ## `build_activity_dataset.py`
 
@@ -183,28 +203,6 @@ python scripts/build_activity_dataset.py \
   --example-unit whole_structure \
   --task regression
 ```
-
-
-## `check_split_leakage.py`
-
-Check for duplicate records and leakage across split manifests (`train/val/test`) using one or more key columns (default: `structure_id`).
-
-Example:
-
-```bash
-python scripts/check_split_leakage.py \
-  --train data/splits/train.csv \
-  --val data/splits/val.csv \
-  --test data/splits/test.csv \
-  --check-cols structure_id
-```
-
-Useful extras:
-
-- `--allow-missing-cols`
-- `--json-out outputs/reports/split_leakage.json`
-
-
 
 ## `constants.py`
 
