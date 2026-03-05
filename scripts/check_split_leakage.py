@@ -11,7 +11,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-DEFAULT_CHECK_COLS = ("pdb_id", "chain_id", "sequence_hash")
+DEFAULT_CHECK_COLS = ("structure_id",)
 
 
 @dataclass
@@ -26,9 +26,9 @@ class LeakageReport:
         return any(self.duplicate_counts.values()) or any(self.overlap_counts.values())
 
 
-def parse_check_columns(raw: str | None) -> Tuple[str, ...]:
+def parse_check_columns(raw: str | None, default_columns: Sequence[str] = DEFAULT_CHECK_COLS) -> Tuple[str, ...]:
     if not raw:
-        return DEFAULT_CHECK_COLS
+        return tuple(default_columns)
     cols = tuple(col.strip() for col in raw.split(",") if col.strip())
     if not cols:
         raise ValueError("--check-cols must include at least one column")
@@ -50,6 +50,13 @@ def load_manifest(path: Path) -> List[Dict[str, str]]:
         frame = pd.read_parquet(path)
         return frame.fillna("").astype(str).to_dict(orient="records")
     raise ValueError(f"Unsupported manifest format for {path}. Use CSV or Parquet.")
+
+
+def infer_default_check_columns(split_rows: Dict[str, List[Dict[str, str]]]) -> Tuple[str, ...]:
+    for rows in split_rows.values():
+        if rows and "example_id" in rows[0]:
+            return ("example_id",)
+    return DEFAULT_CHECK_COLS
 
 
 def _key(row: Dict[str, str], columns: Sequence[str]) -> Tuple[str, ...]:
@@ -103,8 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test", required=True, type=Path, help="Path to test split manifest")
     parser.add_argument(
         "--check-cols",
-        default=",".join(DEFAULT_CHECK_COLS),
-        help="Comma-separated key columns to check for duplicates/leakage",
+        default=None,
+        help=(
+            "Comma-separated key columns to check for duplicates/leakage "
+            "(default: auto; example_id if present, else structure_id)"
+        ),
     )
     parser.add_argument(
         "--identity-threshold",
@@ -122,12 +132,13 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    check_columns = parse_check_columns(args.check_cols)
     split_rows = {
         "train": load_manifest(args.train),
         "val": load_manifest(args.val),
         "test": load_manifest(args.test),
     }
+    default_check_columns = infer_default_check_columns(split_rows)
+    check_columns = parse_check_columns(args.check_cols, default_check_columns)
 
     report = evaluate_leakage(split_rows, check_columns)
     output = {
