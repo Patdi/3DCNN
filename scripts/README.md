@@ -102,6 +102,31 @@ python scripts/train_voxel_cnn.py \
   --lr 1e-3
 ```
 
+
+## `make_pdb_manifest.py`
+
+Build a structure-level manifest from a folder of PDB files (one row per parseable structure).
+
+Example:
+
+```bash
+python scripts/make_pdb_manifest.py \
+  --pdb-dir data/raw/pdbs \
+  --out data/splits/pretrain_manifest.csv
+```
+
+Minimal required args:
+
+- `--pdb-dir`
+- `--out`
+
+Useful extras:
+
+- `--glob "*.pdb"`
+- `--recursive`
+- `--min-residues 50`
+- `--dedupe-by-sequence`
+
 ## `make_splits_from_pdb_folder.py`
 
 Create `train/val/test` split files directly from a folder of PDB files.
