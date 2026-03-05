@@ -14,19 +14,25 @@ from scripts.evaluate_model import (
 
 
 def test_manifest_dataset_loads_and_normalizes(tmp_path: Path):
-    sample_path = tmp_path / "sample.dat"
-    data = np.array([[[[2.0, 4.0]]]], dtype=np.float32)  # (N, D, H, W, C)
-    np.save(sample_path, data)
-    (tmp_path / "sample.dat.npy").rename(sample_path)
+    sample_path = tmp_path / "sample.npz"
+    np.savez(
+        sample_path,
+        x=np.array([[[[2.0]]], [[[4.0]]]], dtype=np.float32),
+        y=np.array(1, dtype=np.int64),
+    )
 
     manifest_path = tmp_path / "manifest.csv"
     with manifest_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["sample_path", "sample_index", "label"])
+        writer = csv.DictWriter(handle, fieldnames=["sample_path", "label"])
         writer.writeheader()
-        writer.writerow({"sample_path": str(sample_path), "sample_index": 0, "label": 1})
+        writer.writerow({"sample_path": str(sample_path), "label": 1})
 
     stats_path = tmp_path / "stats.npz"
-    np.savez(stats_path, train_mean=np.array([[[[1.0, 1.0]]]], dtype=np.float32), train_std=np.array([[[[1.0, 3.0]]]], dtype=np.float32))
+    np.savez(
+        stats_path,
+        train_mean=np.array([[[[1.0]]], [[[1.0]]]], dtype=np.float32),
+        train_std=np.array([[[[1.0]]], [[[3.0]]]], dtype=np.float32),
+    )
 
     ds = ManifestDataset(manifest_path, stats_path)
     item = ds[0]

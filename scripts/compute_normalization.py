@@ -13,7 +13,7 @@ import numpy as np
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", required=True, type=Path, help="CSV manifest with sample_path and sample_index columns")
+    parser.add_argument("--manifest", required=True, type=Path, help="CSV manifest with sample_path (or path) and optional sample_index columns")
     parser.add_argument("--out", required=True, type=Path, help="Output .npz path for train_mean/train_std")
     parser.add_argument("--mode", choices=["per-channel", "global"], default="per-channel")
     parser.add_argument("--max-samples", type=int, default=50000)
@@ -28,7 +28,11 @@ def load_manifest_rows(path: Path) -> list[dict[str, str]]:
     if not rows:
         raise ValueError("Manifest is empty")
 
-    required = {"sample_path", "sample_index"}
+    if "sample_path" not in rows[0] and "path" in rows[0]:
+        for row in rows:
+            row["sample_path"] = row["path"]
+
+    required = {"sample_path"}
     missing = required.difference(rows[0].keys())
     if missing:
         missing_str = ", ".join(sorted(missing))
@@ -47,15 +51,21 @@ def _to_channels_first(sample: np.ndarray) -> np.ndarray:
 
 
 def iter_samples(rows: Iterable[dict[str, str]], manifest_dir: Path) -> Iterable[np.ndarray]:
-    cache: dict[Path, np.ndarray] = {}
+    cache: dict[Path, np.ndarray | np.lib.npyio.NpzFile] = {}
     for row in rows:
         sample_path = Path(row["sample_path"])
         if not sample_path.is_absolute():
             sample_path = manifest_dir / sample_path
         if sample_path not in cache:
             cache[sample_path] = np.load(sample_path, allow_pickle=False)
-        shard = cache[sample_path]
-        sample = shard[int(row["sample_index"])].astype(np.float64)
+        arr = cache[sample_path]
+
+        if "sample_index" in row and row["sample_index"] not in {"", None}:
+            sample = arr[int(row["sample_index"])].astype(np.float64)
+        else:
+            if not isinstance(arr, np.lib.npyio.NpzFile):
+                raise ValueError("Per-example schema requires .npz files with an 'x' array")
+            sample = arr["x"].astype(np.float64)
         yield _to_channels_first(sample)
 
 

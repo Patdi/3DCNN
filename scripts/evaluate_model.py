@@ -20,6 +20,7 @@ class ManifestDataset(Dataset):
     """Dataset that reads per-example rows from a sample manifest CSV."""
 
     def __init__(self, manifest_path: Path, normalization_path: Path | None = None):
+        self.manifest_dir = manifest_path.parent.resolve()
         self.records = self._load_manifest(manifest_path)
         self.mean = None
         self.std = None
@@ -32,9 +33,14 @@ class ManifestDataset(Dataset):
     def _load_manifest(manifest_path: Path) -> List[Dict[str, str]]:
         with manifest_path.open("r", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
-        required = {"sample_path", "sample_index", "label"}
         if not rows:
             return []
+
+        if "sample_path" not in rows[0] and "path" in rows[0]:
+            for row in rows:
+                row["sample_path"] = row["path"]
+
+        required = {"sample_path", "label"}
         missing = required.difference(rows[0].keys())
         if missing:
             missing_str = ", ".join(sorted(missing))
@@ -46,14 +52,22 @@ class ManifestDataset(Dataset):
 
     @staticmethod
     def _to_channels_first(sample: np.ndarray) -> np.ndarray:
-        if sample.ndim == 4 and sample.shape[-1] <= 8:
+        if sample.ndim == 4 and sample.shape[-1] <= 8 and sample.shape[0] > 8:
             return np.transpose(sample, (3, 0, 1, 2))
         return sample
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         row = self.records[index]
-        arr = np.load(Path(row["sample_path"]), allow_pickle=False)
-        sample = arr[int(row["sample_index"])].astype(np.float32)
+        sample_path = Path(row["sample_path"])
+        if not sample_path.is_absolute():
+            sample_path = self.manifest_dir / sample_path
+        arr = np.load(sample_path, allow_pickle=False)
+        if "sample_index" in row and row["sample_index"] not in {"", None}:
+            sample = arr[int(row["sample_index"])].astype(np.float32)
+        else:
+            if not isinstance(arr, np.lib.npyio.NpzFile):
+                raise ValueError("Per-example schema requires .npz files with an 'x' array")
+            sample = arr["x"].astype(np.float32)
         if self.mean is not None and self.std is not None:
             sample = (sample - self.mean) / self.std
         sample = self._to_channels_first(sample)
