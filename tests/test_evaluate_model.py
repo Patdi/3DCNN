@@ -2,7 +2,9 @@ import csv
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from models.cnn3d import CNN3DConfig, VoxelCNN3D
 from scripts.evaluate_model import (
     ManifestDataset,
     compute_balanced_accuracy,
@@ -10,6 +12,7 @@ from scripts.evaluate_model import (
     compute_metrics,
     compute_residue_group_accuracy,
     compute_topk_accuracy,
+    load_model_from_checkpoint,
 )
 
 
@@ -75,6 +78,38 @@ def test_compute_metrics_supports_residue_group_accuracy():
     )
 
     assert np.isclose(compute_residue_group_accuracy(y_true, y_pred), 1.0)
-    metrics = compute_metrics(y_true, y_pred, logits, num_classes=20, requested_metrics=["accuracy", "residue_group_accuracy"])
+    metrics = compute_metrics(
+        y_true,
+        y_pred,
+        logits,
+        num_classes=20,
+        requested_metrics=["accuracy", "residue_group_accuracy"],
+        task="residue_identity",
+    )
     assert np.isclose(metrics["accuracy"], 1.0 / 3.0)
     assert np.isclose(metrics["residue_group_accuracy"], 1.0)
+
+
+def test_load_model_from_state_dict_checkpoint(tmp_path: Path):
+    config = CNN3DConfig(in_channels=1, num_classes=3, input_size=20)
+    model = VoxelCNN3D(config)
+    checkpoint = {
+        "model_state": model.state_dict(),
+        "config": {
+            "in_channels": 1,
+            "num_classes": 3,
+            "dropout": 0.5,
+            "input_size": 20,
+            "conv_channels": [100, 200, 400],
+            "fc_hidden": 1000,
+            "task": "residue_identity",
+        },
+    }
+    checkpoint_path = tmp_path / "model.pt"
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded_model, loaded_config = load_model_from_checkpoint(checkpoint_path, torch.device("cpu"))
+
+    assert isinstance(loaded_model, VoxelCNN3D)
+    assert loaded_config is not None
+    assert loaded_config.task == "residue_identity"

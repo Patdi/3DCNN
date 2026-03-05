@@ -13,15 +13,17 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from models.cnn3d import CNN3DConfig, VoxelCNN3D
 from scripts.constants import RESIDUE_GROUP_BY_LABEL
 
 
 class ManifestDataset(Dataset):
     """Dataset that reads per-example rows from a sample manifest CSV."""
 
-    def __init__(self, manifest_path: Path, normalization_path: Path | None = None):
+    def __init__(self, manifest_path: Path, normalization_path: Path | None = None, task: str = "residue_identity"):
         self.manifest_dir = manifest_path.parent.resolve()
         self.records = self._load_manifest(manifest_path)
+        self.task = task
         self.mean = None
         self.std = None
         if normalization_path is not None:
@@ -73,7 +75,11 @@ class ManifestDataset(Dataset):
         sample = self._to_channels_first(sample)
         return {
             "inputs": torch.from_numpy(sample),
-            "label": torch.tensor(int(row["label"]), dtype=torch.long),
+            "label": (
+                torch.tensor(float(row["label"]), dtype=torch.float32)
+                if self.task == "regression"
+                else torch.tensor(int(row["label"]), dtype=torch.long)
+            ),
         }
 
 
@@ -137,7 +143,12 @@ def compute_auroc_and_prauc(y_true: np.ndarray, logits: np.ndarray, num_classes:
     }
 
 
-def run_inference(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def run_inference(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    task: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     model.eval()
     all_logits: List[np.ndarray] = []
     all_preds: List[np.ndarray] = []
@@ -149,9 +160,14 @@ def run_inference(model: torch.nn.Module, loader: DataLoader, device: torch.devi
             labels = batch["label"].to(device)
             outputs = model(inputs)
             logits = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
-            preds = torch.argmax(logits, dim=1)
-            all_logits.append(logits.detach().cpu().numpy())
-            all_preds.append(preds.detach().cpu().numpy())
+            if task == "regression":
+                preds = logits.squeeze(-1)
+                all_logits.append(preds.detach().cpu().numpy())
+                all_preds.append(preds.detach().cpu().numpy())
+            else:
+                preds = torch.argmax(logits, dim=1)
+                all_logits.append(logits.detach().cpu().numpy())
+                all_preds.append(preds.detach().cpu().numpy())
             all_labels.append(labels.detach().cpu().numpy())
 
     return (
@@ -165,8 +181,9 @@ def compute_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     logits: np.ndarray,
-    num_classes: int,
+    num_classes: int | None,
     requested_metrics: Sequence[str],
+    task: str,
 ) -> Dict[str, object]:
     metrics: Dict[str, object] = {}
     confusion = None
@@ -176,37 +193,64 @@ def compute_metrics(
         if not name:
             continue
         if name == "accuracy":
+            if task == "regression":
+                raise ValueError("Metric 'accuracy' is only valid for classification tasks")
             metrics["accuracy"] = _safe_divide(np.sum(y_true == y_pred), len(y_true))
         elif name == "balanced_accuracy":
+            if task == "regression":
+                raise ValueError("Metric 'balanced_accuracy' is only valid for classification tasks")
+            if num_classes is None:
+                raise ValueError("num_classes is required for classification metrics")
             confusion = confusion if confusion is not None else compute_confusion_matrix(y_true, y_pred, num_classes)
             metrics["balanced_accuracy"] = compute_balanced_accuracy(confusion)
         elif name == "confusion":
+            if task == "regression":
+                raise ValueError("Metric 'confusion' is only valid for classification tasks")
+            if num_classes is None:
+                raise ValueError("num_classes is required for classification metrics")
             confusion = confusion if confusion is not None else compute_confusion_matrix(y_true, y_pred, num_classes)
             metrics["confusion"] = confusion.tolist()
         elif name.startswith("top"):
+            if task == "regression":
+                raise ValueError("Top-k metrics are only valid for classification tasks")
             k = int(name.replace("top", ""))
             metrics[name] = compute_topk_accuracy(logits, y_true, k)
         elif name in {"auroc", "prauc"}:
+            if task == "regression":
+                raise ValueError(f"Metric '{name}' is only valid for classification tasks")
+            if num_classes is None:
+                raise ValueError("num_classes is required for classification metrics")
             auc_metrics = compute_auroc_and_prauc(y_true, logits, num_classes)
             metrics.update({k: v for k, v in auc_metrics.items() if k in requested_metrics})
         elif name == "residue_group_accuracy":
+            if task == "regression":
+                raise ValueError("Metric 'residue_group_accuracy' is only valid for classification tasks")
             metrics["residue_group_accuracy"] = compute_residue_group_accuracy(y_true, y_pred)
+        elif name == "mae":
+            metrics["mae"] = float(np.mean(np.abs(y_pred - y_true)))
+        elif name == "mse":
+            metrics["mse"] = float(np.mean(np.square(y_pred - y_true)))
+        elif name == "rmse":
+            metrics["rmse"] = float(np.sqrt(np.mean(np.square(y_pred - y_true))))
         else:
             raise ValueError(f"Unsupported metric: {metric_name}")
 
     return metrics
 
 
-def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> torch.nn.Module:
+def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> Tuple[torch.nn.Module, CNN3DConfig | None]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if isinstance(checkpoint, torch.nn.Module):
-        return checkpoint.to(device)
-    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("model"), torch.nn.Module):
-        return checkpoint["model"].to(device)
-    raise ValueError(
-        "Checkpoint must contain a serialized torch.nn.Module or a dict with key 'model'. "
-        "State-dict-only checkpoints are not yet supported by this script."
-    )
+        return checkpoint.to(device), None
+    if isinstance(checkpoint, dict):
+        if "model_state" in checkpoint and "config" in checkpoint:
+            config = CNN3DConfig(**checkpoint["config"])
+            model = VoxelCNN3D(config)
+            model.load_state_dict(checkpoint["model_state"], strict=True)
+            return model.to(device), config
+        if isinstance(checkpoint.get("model"), torch.nn.Module):
+            return checkpoint["model"].to(device), None
+    raise ValueError("Checkpoint format not recognized.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,10 +259,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--normalization", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--task", required=True, type=str)
+    parser.add_argument("--task", required=False, type=str)
 
-    parser.add_argument("--num-classes", type=int, default=20)
-    parser.add_argument("--metrics", type=str, default="accuracy,balanced_accuracy,top5,confusion")
+    parser.add_argument("--num-classes", type=int, default=None)
+    parser.add_argument("--metrics", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
@@ -229,15 +273,27 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device)
-    dataset = ManifestDataset(args.manifest, args.normalization)
+    model, checkpoint_config = load_model_from_checkpoint(args.checkpoint, device)
+
+    task = checkpoint_config.task if checkpoint_config is not None else args.task
+    if task is None:
+        raise ValueError("Task is required when checkpoint does not include model config")
+
+    num_classes = args.num_classes
+    if num_classes is None and checkpoint_config is not None:
+        num_classes = checkpoint_config.num_classes
+
+    dataset = ManifestDataset(args.manifest, args.normalization, task=task)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-    model = load_model_from_checkpoint(args.checkpoint, device)
-    logits, preds, labels = run_inference(model, loader, device)
+    logits, preds, labels = run_inference(model, loader, device, task)
 
-    requested_metrics = [metric.strip().lower() for metric in args.metrics.split(",")]
-    metrics = compute_metrics(labels, preds, logits, args.num_classes, requested_metrics)
-    metrics["task"] = args.task
+    metrics_raw = args.metrics
+    if metrics_raw is None:
+        metrics_raw = "mse,mae,rmse" if task == "regression" else "accuracy,balanced_accuracy,top5,confusion"
+    requested_metrics = [metric.strip().lower() for metric in metrics_raw.split(",")]
+    metrics = compute_metrics(labels, preds, logits, num_classes, requested_metrics, task)
+    metrics["task"] = task
     metrics["num_examples"] = int(labels.shape[0])
 
     np.savez(
