@@ -3,6 +3,7 @@
 ## `build_voxel_dataset.py`
 
 Unified voxel dataset builder for legacy `generate_full_sidechain_box_20A.py` and `generate_backbone_box_20A.py` workflows.
+This builder is pretraining-focused and currently supports only residue identity labels.
 
 Example:
 
@@ -22,7 +23,7 @@ Minimal required args:
 - `--split-manifest`
 - `--output-dir`
 - `--example-manifest-out`
-- `--task`
+- `--task` (`residue_identity` only)
 
 Useful extras:
 
@@ -32,6 +33,35 @@ Useful extras:
 - `--num-workers`
 - `--seed`
 - `--format`
+
+
+## `build_activity_dataset.py`
+
+Activity-focused dataset builder separated from pretraining.
+
+Example (mutation/site activity):
+
+```bash
+python scripts/build_activity_dataset.py \
+  --structure-manifest data/splits/train.csv \
+  --activity-manifest data/labels/mutation_activity.csv \
+  --output-dir data/processed/activity/train \
+  --example-manifest-out data/splits/train_activity_sites.csv \
+  --example-unit mutation_site \
+  --task regression
+```
+
+Example (whole-protein activity):
+
+```bash
+python scripts/build_activity_dataset.py \
+  --structure-manifest data/splits/train.csv \
+  --activity-manifest data/labels/protein_activity.csv \
+  --output-dir data/processed/activity/train \
+  --example-manifest-out data/splits/train_activity_structures.csv \
+  --example-unit whole_structure \
+  --task regression
+```
 
 
 ## `compute_normalization.py`
@@ -148,4 +178,3 @@ Outputs:
 - `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
 - optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
 - optional materialized split folders via `--materialize symlink|copy`
-

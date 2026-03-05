@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-manifest", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--example-manifest-out", required=True, type=Path)
-    parser.add_argument("--task", required=True, choices=["residue_identity", "mutation_activity"])
+    parser.add_argument("--task", default="residue_identity", choices=["residue_identity"])
     parser.add_argument("--box-size", type=float, default=20.0)
     parser.add_argument("--voxel-size", type=float, default=1.0)
     parser.add_argument("--channel-scheme", choices=sorted(CHANNEL_SCHEMES), default="element4")
