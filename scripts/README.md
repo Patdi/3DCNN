@@ -2,7 +2,56 @@
 
 This folder contains data preparation, training, evaluation, and dataset QA utilities.
 
-## `build_voxel_dataset.py`
+
+1. ## `make_pdb_manifest.py`
+
+Build a structure-level manifest from a folder of PDB files (one row per parseable structure).
+
+Example:
+
+```bash
+python scripts/make_pdb_manifest.py \
+  --pdb-dir data/raw/pdbs \
+  --out data/splits/pretrain_manifest.csv
+```
+
+Minimal required args:
+
+- `--pdb-dir`
+- `--out`
+
+Useful extras:
+
+- `--glob "*.pdb"`
+- `--recursive`
+- `--min-residues 50`
+- `--dedupe-by-sequence`
+
+2. ## `make_splits_from_pdb_folder.py`
+
+Create `train/val/test` split files directly from a folder of PDB files.
+
+Example:
+
+```bash
+python scripts/make_splits_from_pdb_folder.py \
+  --pdb-dir data/pdbs \
+  --output-dir data/splits \
+  --method sequence-cluster \
+  --seq-identity-threshold 0.4 \
+  --write-legacy-pdb-lists
+```
+
+Outputs:
+
+- `train.txt`, `val.txt`, `test.txt`
+- `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
+- Optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
+- Optional materialized split folders via `--materialize symlink|copy`
+
+
+
+## 3. `build_voxel_dataset.py`
 
 Unified voxel dataset builder for legacy `generate_full_sidechain_box_20A.py` and `generate_backbone_box_20A.py` workflows. This builder is pretraining-focused and currently supports only residue identity labels.
 
@@ -35,81 +84,7 @@ Useful extras:
 - `--seed`
 - `--format`
 
-## `build_activity_dataset.py`
-
-Activity-focused dataset builder separated from pretraining.
-
-Example (mutation/site activity):
-
-```bash
-python scripts/build_activity_dataset.py \
-  --structure-manifest data/splits/train.csv \
-  --activity-manifest data/labels/mutation_activity.csv \
-  --output-dir data/processed/activity/train \
-  --example-manifest-out data/splits/train_activity_sites.csv \
-  --example-unit mutation_site \
-  --task regression
-```
-
-Example (whole-protein activity):
-
-```bash
-python scripts/build_activity_dataset.py \
-  --structure-manifest data/splits/train.csv \
-  --activity-manifest data/labels/protein_activity.csv \
-  --output-dir data/processed/activity/train \
-  --example-manifest-out data/splits/train_activity_structures.csv \
-  --example-unit whole_structure \
-  --task regression
-```
-
-## `make_pdb_manifest.py`
-
-Build a structure-level manifest from a folder of PDB files (one row per parseable structure).
-
-Example:
-
-```bash
-python scripts/make_pdb_manifest.py \
-  --pdb-dir data/raw/pdbs \
-  --out data/splits/pretrain_manifest.csv
-```
-
-Minimal required args:
-
-- `--pdb-dir`
-- `--out`
-
-Useful extras:
-
-- `--glob "*.pdb"`
-- `--recursive`
-- `--min-residues 50`
-- `--dedupe-by-sequence`
-
-## `make_splits_from_pdb_folder.py`
-
-Create `train/val/test` split files directly from a folder of PDB files.
-
-Example:
-
-```bash
-python scripts/make_splits_from_pdb_folder.py \
-  --pdb-dir data/pdbs \
-  --output-dir data/splits \
-  --method sequence-cluster \
-  --seq-identity-threshold 0.4 \
-  --write-legacy-pdb-lists
-```
-
-Outputs:
-
-- `train.txt`, `val.txt`, `test.txt`
-- `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
-- Optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
-- Optional materialized split folders via `--materialize symlink|copy`
-
-## `compute_normalization.py`
+## 4. `compute_normalization.py`
 
 Compute train-set normalization stats from a site-level manifest and write `normalization_stats.npz` for training/evaluation scripts.
 
@@ -132,26 +107,7 @@ Useful extras:
 - `--max-samples`
 - `--seed`
 
-## `check_split_leakage.py`
-
-Check for duplicate records and leakage across split manifests (`train/val/test`) using one or more key columns (default: `structure_id`).
-
-Example:
-
-```bash
-python scripts/check_split_leakage.py \
-  --train data/splits/train.csv \
-  --val data/splits/val.csv \
-  --test data/splits/test.csv \
-  --check-cols structure_id
-```
-
-Useful extras:
-
-- `--allow-missing-cols`
-- `--json-out outputs/reports/split_leakage.json`
-
-## `train_voxel_cnn.py`
+## 5. `train_voxel_cnn.py`
 
 Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
 
@@ -169,8 +125,7 @@ python scripts/train_voxel_cnn.py \
   --batch-size 32 \
   --lr 1e-3
 ```
-
-## `evaluate_model.py`
+## 6. `evaluate_model.py`
 
 Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
 
@@ -199,6 +154,57 @@ Useful extras:
 - `--metrics`
 - `--batch-size`
 - `--device`
+
+
+## `build_activity_dataset.py`
+
+Activity-focused dataset builder separated from pretraining.
+
+Example (mutation/site activity):
+
+```bash
+python scripts/build_activity_dataset.py \
+  --structure-manifest data/splits/train.csv \
+  --activity-manifest data/labels/mutation_activity.csv \
+  --output-dir data/processed/activity/train \
+  --example-manifest-out data/splits/train_activity_sites.csv \
+  --example-unit mutation_site \
+  --task regression
+```
+
+Example (whole-protein activity):
+
+```bash
+python scripts/build_activity_dataset.py \
+  --structure-manifest data/splits/train.csv \
+  --activity-manifest data/labels/protein_activity.csv \
+  --output-dir data/processed/activity/train \
+  --example-manifest-out data/splits/train_activity_structures.csv \
+  --example-unit whole_structure \
+  --task regression
+```
+
+
+## `check_split_leakage.py`
+
+Check for duplicate records and leakage across split manifests (`train/val/test`) using one or more key columns (default: `structure_id`).
+
+Example:
+
+```bash
+python scripts/check_split_leakage.py \
+  --train data/splits/train.csv \
+  --val data/splits/val.csv \
+  --test data/splits/test.csv \
+  --check-cols structure_id
+```
+
+Useful extras:
+
+- `--allow-missing-cols`
+- `--json-out outputs/reports/split_leakage.json`
+
+
 
 ## `constants.py`
 
