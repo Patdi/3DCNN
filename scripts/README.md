@@ -53,7 +53,7 @@ Outputs:
 
 Unified voxel dataset builder for legacy `generate_full_sidechain_box_20A.py` and `generate_backbone_box_20A.py` workflows. This builder is pretraining-focused and currently supports only residue identity labels.
 
-Example:
+Train Example:
 
 ```bash
 python scripts/build_voxel_dataset.py \
@@ -66,6 +66,29 @@ python scripts/build_voxel_dataset.py \
   --channel-scheme element4
 ```
 
+Validate Example:
+```bash
+python scripts/build_voxel_dataset.py \
+  --split-manifest data/splits/val.csv \
+  --output-dir data/processed/voxel_boxes/val \
+  --example-manifest-out data/splits/val_sites.csv \
+  --task residue_identity \
+  --box-size 20 \
+  --voxel-size 1.0 \
+  --channel-scheme element4
+```
+
+Test Example:
+```bash
+python scripts/build_voxel_dataset.py \
+  --split-manifest data/splits/test.csv \
+  --output-dir data/processed/voxel_boxes/test \
+  --example-manifest-out data/splits/test_sites.csv \
+  --task residue_identity \
+  --box-size 20 \
+  --voxel-size 1.0 \
+  --channel-scheme element4
+```
 Minimal required args:
 
 - `--split-manifest`
