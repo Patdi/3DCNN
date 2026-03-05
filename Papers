@@ -1,0 +1,7 @@
+3D deep convolutional neural networks for amino acid environment similarity analysis
+Learning the local landscape of protein structures with convolutional neural networks (github:https://github.com/akulikova64/CNN_protein_landscape)
+A structure-based deep learning framework for protein engineering
+
+Other github: https://github.com/meghana-kshirsagar/3DCNN_protein_structures
+
+Mutations and measured effects databases: https://academic.oup.com/bib/article/24/6/bbad357/7311328?guestAccessKey=
