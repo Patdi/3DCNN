@@ -78,3 +78,25 @@ def test_compute_global_normalization_with_max_samples(tmp_path: Path) -> None:
     assert stats["train_mean"].shape == (1, 1, 1, 1)
     assert stats["train_std"].shape == (1, 1, 1, 1)
     assert int(stats["num_samples"]) == 2
+
+
+def test_compute_per_channel_normalization_from_per_example_npz(tmp_path: Path) -> None:
+    sample_a = tmp_path / "a.npz"
+    sample_b = tmp_path / "b.npz"
+    np.savez(sample_a, x=np.zeros((2, 2, 2, 2), dtype=np.float32), y=np.array(0, dtype=np.int64))
+    np.savez(sample_b, x=np.ones((2, 2, 2, 2), dtype=np.float32) * 2, y=np.array(1, dtype=np.int64))
+
+    manifest = tmp_path / "train_sites.csv"
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["sample_path", "label"])
+        writer.writeheader()
+        writer.writerow({"sample_path": str(sample_a), "label": "0"})
+        writer.writerow({"sample_path": str(sample_b), "label": "1"})
+
+    out = tmp_path / "normalization_stats.npz"
+    rc = main(["--manifest", str(manifest), "--out", str(out), "--mode", "per-channel"])
+    assert rc == 0
+
+    stats = np.load(out)
+    np.testing.assert_allclose(stats["train_mean"].squeeze(), np.array([1.0, 1.0], dtype=np.float32), atol=1e-6)
+    np.testing.assert_allclose(stats["train_std"].squeeze(), np.array([1.0, 1.0], dtype=np.float32), atol=1e-6)

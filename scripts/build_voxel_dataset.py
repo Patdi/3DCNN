@@ -294,7 +294,7 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[L
                 "res_no": str(res_no),
                 "res_name": res_name,
                 "label": str(label),
-                "path": str(out_path),
+                "sample_path": str(out_path),
                 "task": str(cfg["task"]),
                 "channel_scheme": str(cfg["channel_scheme"]),
             }
@@ -318,7 +318,7 @@ def write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
         "res_no",
         "res_name",
         "label",
-        "path",
+        "sample_path",
         "task",
         "channel_scheme",
     ]
