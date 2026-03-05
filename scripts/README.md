@@ -1,9 +1,10 @@
 # Scripts
 
+This folder contains data preparation, training, evaluation, and dataset QA utilities.
+
 ## `build_voxel_dataset.py`
 
-Unified voxel dataset builder for legacy `generate_full_sidechain_box_20A.py` and `generate_backbone_box_20A.py` workflows.
-This builder is pretraining-focused and currently supports only residue identity labels.
+Unified voxel dataset builder for legacy `generate_full_sidechain_box_20A.py` and `generate_backbone_box_20A.py` workflows. This builder is pretraining-focused and currently supports only residue identity labels.
 
 Example:
 
@@ -34,7 +35,6 @@ Useful extras:
 - `--seed`
 - `--format`
 
-
 ## `build_activity_dataset.py`
 
 Activity-focused dataset builder separated from pretraining.
@@ -62,76 +62,6 @@ python scripts/build_activity_dataset.py \
   --example-unit whole_structure \
   --task regression
 ```
-
-
-## `compute_normalization.py`
-
-Compute train-set normalization stats from a site-level manifest and write
-`normalization_stats.npz` for training/evaluation scripts.
-
-Example:
-
-```bash
-python scripts/compute_normalization.py \
-  --manifest data/splits/train_sites.csv \
-  --out data/processed/stats/normalization_stats.npz
-```
-
-Minimal required args:
-
-- `--manifest`
-- `--out`
-
-Useful extras:
-
-- `--mode per-channel|global`
-- `--max-samples`
-- `--seed`
-
-## `evaluate_model.py`
-
-Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
-## `train_voxel_cnn.py`
-
-Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
-
-Example:
-
-```bash
-python scripts/evaluate_model.py \
-  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
-  --manifest data/splits/test_sites.csv \
-  --normalization data/processed/stats/normalization_stats.npz \
-  --output-dir outputs/runs/voxel_cnn_pretrain/eval \
-  --task residue_identity
-```
-
-Minimal required args:
-
-- `--checkpoint`
-- `--manifest`
-- `--normalization`
-- `--output-dir`
-- `--task`
-
-Useful extras:
-
-- `--num-classes`
-- `--metrics`
-- `--batch-size`
-- `--device`
-python scripts/train_voxel_cnn.py \
-  --train-manifest data/splits/train_sites.csv \
-  --val-manifest data/splits/val_sites.csv \
-  --normalization data/processed/stats/normalization_stats.npz \
-  --output-dir outputs/runs/voxel_cnn_pretrain \
-  --task residue_identity \
-  --num-classes 20 \
-  --epochs 30 \
-  --batch-size 32 \
-  --lr 1e-3
-```
-
 
 ## `make_pdb_manifest.py`
 
@@ -176,5 +106,100 @@ Outputs:
 
 - `train.txt`, `val.txt`, `test.txt`
 - `train.csv`, `val.csv`, `test.csv` (with `structure_id,pdb_path,sequence,split`)
-- optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
-- optional materialized split folders via `--materialize symlink|copy`
+- Optional legacy lists `PDB_train.txt`, `PDB_val.txt`, `PDB_test.txt`
+- Optional materialized split folders via `--materialize symlink|copy`
+
+## `compute_normalization.py`
+
+Compute train-set normalization stats from a site-level manifest and write `normalization_stats.npz` for training/evaluation scripts.
+
+Example:
+
+```bash
+python scripts/compute_normalization.py \
+  --manifest data/splits/train_sites.csv \
+  --out data/processed/stats/normalization_stats.npz
+```
+
+Minimal required args:
+
+- `--manifest`
+- `--out`
+
+Useful extras:
+
+- `--mode per-channel|global`
+- `--max-samples`
+- `--seed`
+
+## `check_split_leakage.py`
+
+Check for duplicate records and leakage across split manifests (`train/val/test`) using one or more key columns (default: `structure_id`).
+
+Example:
+
+```bash
+python scripts/check_split_leakage.py \
+  --train data/splits/train.csv \
+  --val data/splits/val.csv \
+  --test data/splits/test.csv \
+  --check-cols structure_id
+```
+
+Useful extras:
+
+- `--allow-missing-cols`
+- `--json-out outputs/reports/split_leakage.json`
+
+## `train_voxel_cnn.py`
+
+Modern PyTorch replacement for legacy `3DCNN.py` + `layers.py`.
+
+Example:
+
+```bash
+python scripts/train_voxel_cnn.py \
+  --train-manifest data/splits/train_sites.csv \
+  --val-manifest data/splits/val_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --output-dir outputs/runs/voxel_cnn_pretrain \
+  --task residue_identity \
+  --num-classes 20 \
+  --epochs 30 \
+  --batch-size 32 \
+  --lr 1e-3
+```
+
+## `evaluate_model.py`
+
+Evaluate a PyTorch checkpoint on a split manifest and export predictions/metrics.
+
+Example:
+
+```bash
+python scripts/evaluate_model.py \
+  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
+  --manifest data/splits/test_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --output-dir outputs/runs/voxel_cnn_pretrain/eval \
+  --task residue_identity
+```
+
+Minimal required args:
+
+- `--checkpoint`
+- `--manifest`
+- `--normalization`
+- `--output-dir`
+- `--task`
+
+Useful extras:
+
+- `--num-classes`
+- `--metrics`
+- `--batch-size`
+- `--device`
+
+## `constants.py`
+
+Shared constants imported by evaluation/analysis code (for example, residue label-to-group mappings used by `evaluate_model.py`).
