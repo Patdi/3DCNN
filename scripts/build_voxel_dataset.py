@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+from numba import njit
 from scipy.ndimage import gaussian_filter
 
 # Residue label mapping from legacy code.
@@ -204,6 +205,91 @@ def map_channel(atom: AtomRecord, scheme: str) -> Optional[int]:
         return None
 
 
+def chain_to_code(chain: str) -> int:
+    return ord(chain[0]) if chain else 0
+
+
+@njit(cache=True)
+def voxelize_numba(
+    coords: np.ndarray,
+    resnos: np.ndarray,
+    chains: np.ndarray,
+    channels: np.ndarray,
+    center_resno: int,
+    center_chain: int,
+    reference: np.ndarray,
+    transform: np.ndarray,
+    min_corner: float,
+    max_corner: float,
+    voxel_size: float,
+    num_voxels: int,
+    n_channels: int,
+) -> tuple[np.ndarray, int]:
+    sample = np.zeros((n_channels, num_voxels, num_voxels, num_voxels), dtype=np.float32)
+    atom_count = 0
+    for i in range(coords.shape[0]):
+        if chains[i] == center_chain and resnos[i] == center_resno:
+            continue
+
+        dx0 = coords[i, 0] - reference[0]
+        dx1 = coords[i, 1] - reference[1]
+        dx2 = coords[i, 2] - reference[2]
+
+        tx = dx0 * transform[0, 0] + dx1 * transform[1, 0] + dx2 * transform[2, 0]
+        ty = dx0 * transform[0, 1] + dx1 * transform[1, 1] + dx2 * transform[2, 1]
+        tz = dx0 * transform[0, 2] + dx1 * transform[1, 2] + dx2 * transform[2, 2]
+
+        if tx <= min_corner or tx >= max_corner:
+            continue
+        if ty <= min_corner or ty >= max_corner:
+            continue
+        if tz <= min_corner or tz >= max_corner:
+            continue
+
+        ch = channels[i]
+        if ch < 0:
+            continue
+
+        bx = int((tx - min_corner) / voxel_size)
+        by = int((ty - min_corner) / voxel_size)
+        bz = int((tz - min_corner) / voxel_size)
+
+        if bx < 0:
+            bx = 0
+        elif bx >= num_voxels:
+            bx = num_voxels - 1
+
+        if by < 0:
+            by = 0
+        elif by >= num_voxels:
+            by = num_voxels - 1
+
+        if bz < 0:
+            bz = 0
+        elif bz >= num_voxels:
+            bz = num_voxels - 1
+
+        sample[ch, bx, by, bz] += 1.0
+        atom_count += 1
+
+    return sample, atom_count
+
+
+def prepare_voxel_inputs(all_atoms: Sequence[AtomRecord], channel_scheme: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n_atoms = len(all_atoms)
+    coords = np.empty((n_atoms, 3), dtype=np.float32)
+    resnos = np.empty(n_atoms, dtype=np.int32)
+    chains = np.empty(n_atoms, dtype=np.int32)
+    channels = np.empty(n_atoms, dtype=np.int16)
+    for i, atom in enumerate(all_atoms):
+        coords[i] = atom.xyz
+        resnos[i] = atom.res_no
+        chains[i] = chain_to_code(atom.chain)
+        channel_idx = map_channel(atom, channel_scheme)
+        channels[i] = channel_idx if channel_idx is not None else -1
+    return coords, resnos, chains, channels
+
+
 def build_voxel_for_center(
     all_atoms: Sequence[AtomRecord],
     residue_atoms: Sequence[AtomRecord],
@@ -212,6 +298,7 @@ def build_voxel_for_center(
     box_size: float,
     voxel_size: float,
     atom_density_threshold: float,
+    precomputed_inputs: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> Optional[np.ndarray]:
     atom_positions = {a.atom: a.xyz for a in residue_atoms}
     if set(atom_positions.keys()) != LABEL_ATOM_TYPE_DICT[label]:
@@ -222,24 +309,29 @@ def build_voxel_for_center(
     min_corner = -box_size / 2.0
     max_corner = box_size / 2.0
 
-    res_key = {(a.chain, a.res_no) for a in residue_atoms}
-    sample = np.zeros((len(CHANNEL_SCHEMES[channel_scheme]), num_voxels, num_voxels, num_voxels), dtype=np.float32)
-    atom_count = 0
+    if precomputed_inputs is None:
+        coords, resnos, chains, channels = prepare_voxel_inputs(all_atoms, channel_scheme)
+    else:
+        coords, resnos, chains, channels = precomputed_inputs
 
-    for atom in all_atoms:
-        if (atom.chain, atom.res_no) in res_key:
-            continue
-        transformed = (atom.xyz - reference).dot(transform)
-        if np.any(transformed <= min_corner) or np.any(transformed >= max_corner):
-            continue
-        channel_idx = map_channel(atom, channel_scheme)
-        if channel_idx is None:
-            continue
-        shifted = transformed - min_corner
-        b = np.floor(shifted / voxel_size).astype(int)
-        b = np.clip(b, 0, num_voxels - 1)
-        sample[channel_idx, b[0], b[1], b[2]] += 1.0
-        atom_count += 1
+    center_chain = chain_to_code(residue_atoms[0].chain)
+    center_resno = residue_atoms[0].res_no
+    n_channels = len(CHANNEL_SCHEMES[channel_scheme])
+    sample, atom_count = voxelize_numba(
+        coords=coords,
+        resnos=resnos,
+        chains=chains,
+        channels=channels,
+        center_resno=center_resno,
+        center_chain=center_chain,
+        reference=reference,
+        transform=transform,
+        min_corner=min_corner,
+        max_corner=max_corner,
+        voxel_size=voxel_size,
+        num_voxels=num_voxels,
+        n_channels=n_channels,
+    )
 
     threshold = (box_size**3) * atom_density_threshold
     if atom_count <= threshold:
@@ -302,6 +394,8 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[s
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    precomputed_inputs = prepare_voxel_inputs(atoms, str(cfg["channel_scheme"]))
+
     for (chain, res_no, res_name), residue_atoms in centers:
         if res_name not in RES_LABEL_DICT:
             stats["skipped_invalid_label"] += 1
@@ -319,6 +413,7 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[s
             box_size=float(cfg["box_size"]),
             voxel_size=float(cfg["voxel_size"]),
             atom_density_threshold=float(cfg["atom_density_threshold"]),
+            precomputed_inputs=precomputed_inputs,
         )
         if voxel is None:
             stats["skipped_density"] += 1
