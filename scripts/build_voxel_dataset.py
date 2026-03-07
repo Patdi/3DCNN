@@ -9,16 +9,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import logging
+import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
-from pathlib import Path
-import json
-import os
-import tempfile
-import hash
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
@@ -110,28 +109,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--done-dir", type=Path, default=None, help="Directory for per-structure completion markers (default: <output-dir>/_done).")
     return parser.parse_args()
 
+
 def config_fingerprint(cfg: dict) -> str:
-    blob = json.dump(cfg, sort_keys=True).encode("utf-8")
+    blob = json.dumps(cfg, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
+
 
 def get_done_dir(output_dir: Path, done_dir: Path | None) -> Path:
     d = done_dir if done_dir is not None else output_dir / "_done"
-    d.mkdir(parents=True, exist_ok = True)
+    d.mkdir(parents=True, exist_ok=True)
     return d
 
-def structure_done_path(done_dir: Path, structure_di: str) -> bool:
+
+def structure_done_path(done_dir: Path, structure_id: str) -> Path:
+    return done_dir / f"{structure_id}.json"
+
+
+def is_structure_done(done_dir: Path, structure_id: str) -> bool:
     return structure_done_path(done_dir, structure_id).exists()
 
-def mark_structure_done(done_dir: Path, structure_id: str, payload: dict) -> None
+
+def mark_structure_done(done_dir: Path, structure_id: str, payload: dict) -> None:
     out = structure_done_path(done_dir, structure_id)
     tmp = out.with_suffix(".tmp")
-    with tmp.out("w", encoding = "utf-8") as handle:
-        json.dump(payload, handle, indent = 2, sort_keys=True)
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
     os.replace(tmp, out)
+
 
 def atomic_savez(final_path: Path, **arrays) -> None:
     final_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = final_path.with_suffix(final_path.sufix + ".tmp")
+    tmp_path = final_path.with_suffix(final_path.suffix + ".tmp")
+    with tmp_path.open("wb") as handle:
+        np.savez_compressed(handle, **arrays)
     os.replace(tmp_path, final_path)
 
 def parse_pdb_atoms(pdb_path: Path, include_hetero: bool) -> List[AtomRecord]:
@@ -261,13 +271,13 @@ def structure_from_row(row: Dict[str, str], manifest_dir: Path) -> Tuple[str, Pa
     return structure_id, path
 
 
-def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[List[Dict[str, str]], Dict[str, int]]:          
+def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[str, List[Dict[str, str]], Dict[str, int]]:
     row, cfg = payload
     structure_id, pdb_path = structure_from_row(row, Path(cfg["manifest_dir"]))
     atoms = parse_pdb_atoms(pdb_path, include_hetero=bool(cfg["include_hetero"]))
     stats = {"skipped_missing_atoms": 0, "skipped_invalid_label": 0, "skipped_density": 0}
     if not atoms:
-        return [], stats
+        return structure_id, [], stats
 
     residue_map = residues_from_atoms(atoms)
     rows: List[Dict[str, str]] = []
@@ -288,6 +298,8 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[L
             centers = [centers[i] for i in sorted(idx)]
 
     out_dir = Path(cfg["output_dir"]) / structure_id
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for (chain, res_no, res_name), residue_atoms in centers:
@@ -314,7 +326,7 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[L
 
         example_id = f"{structure_id}_{chain}_{res_no}_{res_name}"
         out_path = out_dir / f"{example_id}.npz"
-        np.savez_compressed(out_path, x=voxel.astype(np.float32), y=np.int64(label))
+        atomic_savez(out_path, x=voxel.astype(np.float32), y=np.int64(label))
 
         rows.append(
             {
@@ -330,7 +342,7 @@ def worker_process(payload: Tuple[Dict[str, str], Dict[str, object]]) -> Tuple[L
             }
         )
 
-    return rows, stats
+    return structure_id, rows, stats
 
 
 def load_split_rows(path: Path) -> List[Dict[str, str]]:
@@ -344,7 +356,7 @@ MANIFEST_FIELDS = [
     "res_no",
     "res_name",
     "label",
-    "path",
+    "sample_path",
     "task",
     "channel_scheme",
 ]
@@ -354,10 +366,11 @@ def append_manifest_rows(rows: list[dict[str, str]], out_path: Path) -> None:
         return
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not out_path.exists() or out_path.stat().st_size == 0
-    with out_path.open("a", newline="", encoding = "utf-8") as handle:
+    with out_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
         if write_header:
             writer.writeheader()
-        writer.writerows(rows)    
+        writer.writerows(rows)
 
 def write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
     rows = list(rows)
@@ -387,7 +400,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = load_split_rows(args.split_manifest)
+    split_rows = load_split_rows(args.split_manifest)
     cfg = {
         "manifest_dir": str(args.split_manifest.parent.resolve()),
         "output_dir": str(args.output_dir.resolve()),
@@ -402,52 +415,73 @@ def main() -> None:
         "seed": args.seed,
     }
 
-    payloads = [(r, cfg) for r in rows]
-    all_examples: List[Dict[str, str]] = []
-    agg = {"skipped_missing_atoms": 0, "skipped_invalid_label": 0, "skipped_density": 0}
-    
-    done_dir = get_done_dir(args.output.dir, args.done_dir)
-    rows = load_split_rows(args.split_manifest)
-    pending_rows = []
+    done_dir = get_done_dir(args.output_dir, args.done_dir)
 
-    for row in rows:
+    pending_rows: list[Dict[str, str]] = []
+    seen_structure_ids: set[str] = set()
+    for row in split_rows:
         structure_id = row.get("structure_id") or row.get("pdb_id") or row.get("id")
         if not structure_id:
             raise ValueError("Missing structure_id/pdb_id/id in split manifest.")
+        if structure_id in seen_structure_ids:
+            logging.warning("Duplicate structure id in split manifest, skipping duplicate row: %s", structure_id)
+            continue
+        seen_structure_ids.add(structure_id)
         if args.resume and not args.overwrite and is_structure_done(done_dir, structure_id):
             logging.info("Skipping complete structure %s", structure_id)
             continue
         pending_rows.append(row)
-    
+
+    payloads = [(r, cfg) for r in pending_rows]
+    all_examples: List[Dict[str, str]] = []
+    agg = {"skipped_missing_atoms": 0, "skipped_invalid_label": 0, "skipped_density": 0}
+
+    if args.overwrite and args.example_manifest_out.exists():
+        args.example_manifest_out.unlink()
+
     if args.num_workers > 1:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
-            for out_rows, stats in pool.map(worker_process, payloads):
+            for structure_id, out_rows, stats in pool.map(worker_process, payloads):
                 all_examples.extend(out_rows)
+                append_manifest_rows(out_rows, args.example_manifest_out)
+                mark_structure_done(
+                    done_dir,
+                    structure_id,
+                    {
+                        "structure_id": structure_id,
+                        "num_examples": len(out_rows),
+                        "stats": stats,
+                        "channel_scheme": args.channel_scheme,
+                        "task": args.task,
+                        "box_size": args.box_size,
+                        "voxel_size": args.voxel_size,
+                        "config_fingerprint": config_fingerprint(cfg),
+                    },
+                )
                 for key, value in stats.items():
                     agg[key] += value
     else:
         for payload in payloads:
-            out_rows, stats = worker_process(payload)
+            structure_id, out_rows, stats = worker_process(payload)
             all_examples.extend(out_rows)
+            append_manifest_rows(out_rows, args.example_manifest_out)
+            mark_structure_done(
+                done_dir,
+                structure_id,
+                {
+                    "structure_id": structure_id,
+                    "num_examples": len(out_rows),
+                    "stats": stats,
+                    "channel_scheme": args.channel_scheme,
+                    "task": args.task,
+                    "box_size": args.box_size,
+                    "voxel_size": args.voxel_size,
+                    "config_fingerprint": config_fingerprint(cfg),
+                },
+            )
             for key, value in stats.items():
                 agg[key] += value
-    
-    append_manifest_rows(out_rows, args.example_manifest_out)
-    mark_structure_done(
-        done_dir, 
-        structure_id,
-        {
-            "structure_id": structure_id,
-            "num_examples": len(out_rows),
-            "stats": stats,
-            "channel_scheme": args.channel_scheme,
-            "task": args.task,
-            "box_size": args.box_size,
-            "voxel_size": args.voxel_size,
-        },
-    )
-    
-    write_manifest(all_examples, args.example_manifest_out)
+
     logging.info("Wrote %d examples to %s", len(all_examples), args.example_manifest_out)
     logging.info("Skipped (missing atoms=%d, invalid label=%d, density=%d)", agg["skipped_missing_atoms"], agg["skipped_invalid_label"], agg["skipped_density"])
 
