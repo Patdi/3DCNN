@@ -1,6 +1,16 @@
 3D deep convolutional neural networks for amino acid environment similarity analysis
 Learning the local landscape of protein structures with convolutional neural networks (github:https://github.com/akulikova64/CNN_protein_landscape)
 A structure-based deep learning framework for protein engineering
+Biosensor and machine learning-aided engineering of an amaryllidaceae enzyme
+Stability Oracle: a structure-based graphtransformer framework for identifying stabilizing mutations
+Self-supervised machine learning methods for protein design improve sampling but not the identification of high-fitness variants
+Protein Engineering for Industrial Biocatalysis: Principles, Approaches, and Lessons from Engineered PETases
+Two sequence‑ and two structure‑based ML models have learned different aspects of protein biochemistry
+Machine Learning Guided Rational Design of a Non-Heme Iron-Based Lysine Dioxygenase Improves its Total Turnover Number
+Synthetic microbial sensing and biosynthesis of amaryllidaceae alkaloids
+Protein property prediction based on local environment by 3D equivariant convolutional neural networks
+Sequence and structure based deep learning models represent different aspects of protein biochemistry
+Using Transformers for Prediction of the Effect of Mutations
 
 Other github: https://github.com/meghana-kshirsagar/3DCNN_protein_structures
 
