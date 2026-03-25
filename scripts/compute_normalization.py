@@ -65,7 +65,6 @@ def _to_channels_first(sample: np.ndarray) -> np.ndarray:
 
 
 def iter_samples(rows: Iterable[dict[str, str]], manifest_dir: Path) -> Iterable[np.ndarray]:
-    cache: dict[Path, np.ndarray | np.lib.npyio.NpzFile] = {}
     for row in rows:
         sample_path = Path(row["sample_path"])
         if not sample_path.is_absolute():
@@ -75,16 +74,18 @@ def iter_samples(rows: Iterable[dict[str, str]], manifest_dir: Path) -> Iterable
                 f"Expected sample_path to point to a voxel sample (.npz/.npy), "
                 f"got PDB file: {sample_path}"
             )
-        if sample_path not in cache:
-            cache[sample_path] = np.load(sample_path, allow_pickle=False)
-        arr = cache[sample_path]
-
-        if "sample_index" in row and row["sample_index"] not in {"", None}:
-            sample = arr[int(row["sample_index"])].astype(np.float64)
-        else:
-            if not isinstance(arr, np.lib.npyio.NpzFile):
-                raise ValueError("Per-example schema requires .npz files with an 'x' array")
-            sample = arr["x"].astype(np.float64)
+        arr = np.load(sample_path, allow_pickle=False)
+        try:
+            if "sample_index" in row and row["sample_index"] not in {"", None}:
+                sample = arr[int(row["sample_index"])].astype(np.float64)
+            else:
+                if not isinstance(arr, np.lib.npyio.NpzFile):
+                    raise ValueError("Per-example schema requires .npz files with an 'x' array")
+                sample = arr["x"].astype(np.float64)
+        finally:
+            close = getattr(arr, "close", None)
+            if callable(close):
+                close()
         yield _to_channels_first(sample)
 
 
