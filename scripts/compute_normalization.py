@@ -28,13 +28,27 @@ def load_manifest_rows(path: Path) -> list[dict[str, str]]:
     if not rows:
         raise ValueError("Manifest is empty")
 
+    # Backward-compatible aliases used by older pipeline outputs.
     if "sample_path" not in rows[0] and "path" in rows[0]:
         for row in rows:
             row["sample_path"] = row["path"]
+    if "sample_path" not in rows[0] and "sample_file" in rows[0]:
+        for row in rows:
+            row["sample_path"] = row["sample_file"]
 
     required = {"sample_path"}
     missing = required.difference(rows[0].keys())
     if missing:
+        # Structure-level manifests are valid inputs for build_voxel_dataset.py,
+        # but not directly for normalization, which expects example-level .npz rows.
+        if "pdb_path" in rows[0]:
+            raise ValueError(
+                "compute_normalization.py expects an example/site manifest with "
+                "a sample_path column that points to .npz voxel files. "
+                "The provided manifest looks like a structure-level PDB manifest "
+                "(contains pdb_path). Run scripts/build_voxel_dataset.py first and "
+                "pass its --example-manifest-out CSV to --manifest."
+            )
         missing_str = ", ".join(sorted(missing))
         raise ValueError(f"Manifest missing required columns: {missing_str}")
     return rows
@@ -56,6 +70,11 @@ def iter_samples(rows: Iterable[dict[str, str]], manifest_dir: Path) -> Iterable
         sample_path = Path(row["sample_path"])
         if not sample_path.is_absolute():
             sample_path = manifest_dir / sample_path
+        if sample_path.suffix.lower() == ".pdb":
+            raise ValueError(
+                f"Expected sample_path to point to a voxel sample (.npz/.npy), "
+                f"got PDB file: {sample_path}"
+            )
         if sample_path not in cache:
             cache[sample_path] = np.load(sample_path, allow_pickle=False)
         arr = cache[sample_path]
