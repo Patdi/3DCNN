@@ -17,6 +17,7 @@ from torch import nn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+from torch.cuda.amp import autocast
 
 try:
    from torch import GradScaler           # torch >= 2.3
@@ -144,7 +145,7 @@ def run_epoch(
         if training:
             optimizer.zero_grad(set_to_none=True)
 
-        with autocast(device_type=device.type, enabled=amp_enabled):
+        with autocast(enabled=amp_enabled):
             logits = model(x)
             if task == "regression":
                 loss = loss_fn(logits.squeeze(-1), y)
@@ -240,7 +241,7 @@ def main() -> None:
 
     loss_fn = build_loss(args.task, class_weights=class_weights)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scaler = GradScaler(device=device.type, enabled=args.amp and device.type == "cuda")
+    scaler = GradScaler(enabled=args.amp and device.type == "cuda")
 
     train_loader = DataLoader(
         train_ds,
