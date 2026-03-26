@@ -14,10 +14,14 @@ from typing import Any
 import numpy as np
 import torch
 from torch import nn
-from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+
+try:
+   from torch import GradScaler           # torch >= 2.3
+except ImportError:
+   from torch.cuda.amp import GradScaler  # torch < 2.3
 
 from models.cnn3d import CNN3DConfig, VoxelCNN3D, build_loss
 
