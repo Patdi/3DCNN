@@ -79,6 +79,7 @@ class VoxelManifestDataset(Dataset):
         if not path.is_absolute():
             path = self.manifest_dir / path
         if path not in self._cache:
+            # Intentional shard caching: many samples can reference the same shard path.
             self._cache[path] = np.load(path, allow_pickle=False)
         return self._cache[path]
 
@@ -90,15 +91,16 @@ class VoxelManifestDataset(Dataset):
             sample = sample_obj[sample_index].astype(np.float32)
         else:
             sample_path, label = row
-            sample_obj = self._load_file(Path(sample_path))
-            if not isinstance(sample_obj, np.lib.npyio.NpzFile):
-                raise ValueError("Per-example schema requires .npz files with 'x' and 'y' arrays")
-            sample = sample_obj["x"].astype(np.float32)
-            if self.task != "regression" and "y" in sample_obj:
-                npz_label = int(np.asarray(sample_obj["y"]).item())
-                row_label = int(label)
-                if npz_label != row_label:
-                    raise ValueError(f"Label mismatch for {sample_path}: manifest={row_label} npz={npz_label}")
+            path = Path(sample_path)
+            if not path.is_absolute():
+                path = self.manifest_dir / path
+            with np.load(path, allow_pickle=False) as sample_obj:
+                sample = sample_obj["x"].astype(np.float32)
+                if self.task != "regression" and "y" in sample_obj:
+                    npz_label = int(np.asarray(sample_obj["y"]).item())
+                    row_label = int(label)
+                    if npz_label != row_label:
+                        raise ValueError(f"Label mismatch for {sample_path}: manifest={row_label} npz={npz_label}")
         sample = (sample - self.mean) / self.std
 
         if sample.ndim == 3:
