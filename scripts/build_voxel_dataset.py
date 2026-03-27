@@ -456,35 +456,85 @@ MANIFEST_FIELDS = [
     "channel_scheme",
 ]
 
-def append_manifest_rows(rows: list[dict[str, str]], out_path: Path) -> None:
-    if not rows:
-        return
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not out_path.exists() or out_path.stat().st_size == 0
-    with out_path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
-        if write_header:
-            writer.writeheader()
-        writer.writerows(rows)
+def _rows_for_structure_from_outputs(structure_id: str, cfg: dict[str, object]) -> list[dict[str, str]]:
+    structure_dir = Path(str(cfg["output_dir"])) / structure_id
+    if not structure_dir.exists():
+        return []
 
-def write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
+    rows: list[dict[str, str]] = []
+    for npz_path in sorted(structure_dir.glob("*.npz")):
+        parts = npz_path.stem.split("_")
+        if len(parts) < 4:
+            logging.warning("Skipping malformed sample filename for %s: %s", structure_id, npz_path.name)
+            continue
+        chain_id = parts[-3]
+        res_no = parts[-2]
+        res_name = parts[-1]
+        if res_name not in RES_LABEL_DICT:
+            logging.warning("Skipping sample with unknown residue label for %s: %s", structure_id, npz_path.name)
+            continue
+        rows.append(
+            {
+                "example_id": npz_path.stem,
+                "structure_id": structure_id,
+                "chain_id": chain_id,
+                "res_no": res_no,
+                "res_name": res_name,
+                "label": str(RES_LABEL_DICT[res_name]),
+                "sample_path": str(npz_path),
+                "task": str(cfg["task"]),
+                "channel_scheme": str(cfg["channel_scheme"]),
+            }
+        )
+    return rows
+
+
+def collect_manifest_rows(
+    structure_ids: Sequence[str],
+    done_dir: Path,
+    cfg: dict[str, object],
+    include_incomplete: bool = False,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for structure_id in structure_ids:
+        if not include_incomplete and not is_structure_done(done_dir, structure_id):
+            continue
+        rows.extend(_rows_for_structure_from_outputs(structure_id, cfg))
+    return rows
+
+
+def validate_manifest_rows(rows: Sequence[Dict[str, str]], require_existing_paths: bool = True) -> None:
+    expected_fields = set(MANIFEST_FIELDS)
+    for idx, row in enumerate(rows):
+        row_fields = set(row.keys())
+        if row_fields != expected_fields:
+            raise ValueError(
+                f"Manifest row {idx} has unexpected fields: got {sorted(row_fields)}, expected {sorted(expected_fields)}"
+            )
+        for field in MANIFEST_FIELDS:
+            value = str(row[field])
+            if "\n" in value or "\r" in value:
+                raise ValueError(f"Manifest row {idx} field '{field}' contains an embedded newline.")
+        sample_path = str(row["sample_path"])
+        if not sample_path.endswith(".npz"):
+            raise ValueError(f"Manifest row {idx} has non-npz sample_path: {sample_path}")
+        if require_existing_paths and not Path(sample_path).exists():
+            raise FileNotFoundError(f"Manifest row {idx} sample_path does not exist: {sample_path}")
+
+
+def atomic_write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
     rows = list(rows)
+    validate_manifest_rows(rows, require_existing_paths=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fields = [
-        "example_id",
-        "structure_id",
-        "chain_id",
-        "res_no",
-        "res_name",
-        "label",
-        "sample_path",
-        "task",
-        "channel_scheme",
-    ]
-    with out_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    with tmp_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+    os.replace(tmp_path, out_path)
+
+def write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
+    atomic_write_manifest(rows, out_path)
 
 
 def main() -> None:
@@ -528,17 +578,11 @@ def main() -> None:
         pending_rows.append(row)
 
     payloads = [(r, cfg) for r in pending_rows]
-    all_examples: List[Dict[str, str]] = []
     agg = {"skipped_missing_atoms": 0, "skipped_invalid_label": 0, "skipped_density": 0}
-
-    if args.overwrite and args.example_manifest_out.exists():
-        args.example_manifest_out.unlink()
 
     if args.num_workers > 1:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
             for structure_id, out_rows, stats in pool.map(worker_process, payloads):
-                all_examples.extend(out_rows)
-                append_manifest_rows(out_rows, args.example_manifest_out)
                 mark_structure_done(
                     done_dir,
                     structure_id,
@@ -558,8 +602,6 @@ def main() -> None:
     else:
         for payload in payloads:
             structure_id, out_rows, stats = worker_process(payload)
-            all_examples.extend(out_rows)
-            append_manifest_rows(out_rows, args.example_manifest_out)
             mark_structure_done(
                 done_dir,
                 structure_id,
@@ -577,7 +619,12 @@ def main() -> None:
             for key, value in stats.items():
                 agg[key] += value
 
-    logging.info("Wrote %d examples to %s", len(all_examples), args.example_manifest_out)
+    structure_ids_in_split = [sid for sid in seen_structure_ids]
+    final_rows = collect_manifest_rows(structure_ids_in_split, done_dir=done_dir, cfg=cfg, include_incomplete=False)
+    final_rows.sort(key=lambda row: row["example_id"])
+    atomic_write_manifest(final_rows, args.example_manifest_out)
+
+    logging.info("Wrote %d examples to %s", len(final_rows), args.example_manifest_out)
     logging.info("Skipped (missing atoms=%d, invalid label=%d, density=%d)", agg["skipped_missing_atoms"], agg["skipped_invalid_label"], agg["skipped_density"])
 
 
