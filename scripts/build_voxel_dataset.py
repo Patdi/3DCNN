@@ -22,6 +22,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 from numba import njit
 from scipy.ndimage import gaussian_filter
+from tqdm import tqdm
 
 # Residue label mapping from legacy code.
 RES_LABEL_DICT = {
@@ -530,7 +531,11 @@ def atomic_write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> Non
     with tmp_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        if len(rows) >= 10_000:
+            for row in tqdm(rows, total=len(rows), desc="Writing manifest", unit="row"):
+                writer.writerow(row)
+        else:
+            writer.writerows(rows)
     os.replace(tmp_path, out_path)
 
 def write_manifest(rows: Iterable[Dict[str, str]], out_path: Path) -> None:
@@ -582,7 +587,12 @@ def main() -> None:
 
     if args.num_workers > 1:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
-            for structure_id, out_rows, stats in pool.map(worker_process, payloads):
+            for structure_id, out_rows, stats in tqdm(
+                pool.map(worker_process, payloads),
+                total=len(pending_rows),
+                desc="Processing structures",
+                unit="structure",
+            ):
                 mark_structure_done(
                     done_dir,
                     structure_id,
@@ -600,7 +610,7 @@ def main() -> None:
                 for key, value in stats.items():
                     agg[key] += value
     else:
-        for payload in payloads:
+        for payload in tqdm(payloads, total=len(payloads), desc="Processing structures", unit="structure"):
             structure_id, out_rows, stats = worker_process(payload)
             mark_structure_done(
                 done_dir,
