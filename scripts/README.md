@@ -177,6 +177,91 @@ Useful extras:
 - `--batch-size`
 - `--device`
 
+## 7. `repair_voxel_manifest.py`
+
+Repair or rebuild voxel manifest CSV files from on-disk `.npz` samples. This is useful when a manifest has corrupted/concatenated rows, stale paths, or missing metadata.
+
+Common usage (rebuild from disk only):
+
+```bash
+python scripts/repair_voxel_manifest.py \
+  --voxel-root data/processed/voxel_boxes/train \
+  --output-manifest data/splits/train_sites_repaired.csv \
+  --task residue_identity \
+  --channel-scheme element4 \
+  --rebuild-only \
+  --dedupe \
+  --validate-files
+```
+
+Common usage (salvage + merge with disk truth):
+
+```bash
+python scripts/repair_voxel_manifest.py \
+  --input-manifest data/splits/train_sites.csv \
+  --voxel-root data/processed/voxel_boxes/train \
+  --output-manifest data/splits/train_sites_repaired.csv \
+  --task residue_identity \
+  --channel-scheme element4 \
+  --salvage-existing \
+  --dedupe \
+  --validate-files \
+  --infer-labels \
+  --output-json outputs/reports/train_manifest_repair.json
+```
+
+Minimal required args:
+
+- `--voxel-root`
+- `--output-manifest`
+- `--task` (`residue_identity|mutation_activity|regression`)
+
+Useful extras:
+
+- `--input-manifest` (required when using `--salvage-existing`)
+- `--rebuild-only` or `--salvage-existing`
+- `--dedupe`
+- `--validate-files`
+- `--infer-labels`
+- `--strict`
+- `--output-json`
+
+## 8. `validate_voxel_dataset.py`
+
+Validate a site-level voxel manifest and corresponding `.npz` files to catch malformed CSV rows, missing/unreadable files, label mismatches, duplicate IDs/paths, and shape inconsistencies.
+
+Example:
+
+```bash
+python scripts/validate_voxel_dataset.py \
+  --manifest data/splits/train_sites.csv \
+  --root-dir data/processed/voxel_boxes/train \
+  --task residue_identity \
+  --check-files \
+  --check-labels \
+  --check-shape \
+  --check-duplicates \
+  --expected-channels 4 \
+  --expected-box-size 20 \
+  --output-json outputs/reports/train_dataset_validation.json
+```
+
+Minimal required args:
+
+- `--manifest`
+
+Useful extras:
+
+- `--root-dir` (defaults to the manifest parent directory)
+- `--task` (`residue_identity|mutation_activity|regression`)
+- `--check-files`
+- `--check-labels`
+- `--check-shape`
+- `--check-duplicates`
+- `--sample-limit`
+- `--fail-fast`
+- `--output-json`
+
 ## Extras:
 
 ## `check_split_leakage.py`
