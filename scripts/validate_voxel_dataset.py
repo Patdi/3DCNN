@@ -352,7 +352,7 @@ def main() -> int:
             header_len = len(header)
 
             progress_total = args.sample_limit if args.sample_limit is not None else None
-            iterator = tqdm(reader, total=progress_total, desc="Validating manifest", unit="rows")
+            iterator = tqdm(reader, total=progress_total, desc="Validating manifest", unit=" rows")
 
             for row_num, row in enumerate(iterator, start=2):
                 if args.sample_limit is not None and summary["total_rows_scanned"] >= args.sample_limit:
