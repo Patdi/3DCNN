@@ -144,7 +144,10 @@ python scripts/train_voxel_cnn.py \
   --num-classes 20 \
   --epochs 30 \
   --batch-size 32 \
-  --lr 1e-3
+  --lr 1e-3 \
+  --num-workers 8 \
+  --persistent-workers \
+  --prefetch-factor 2
 ```
 
 ## 6. `evaluate_model.py`
