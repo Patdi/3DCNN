@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import random
@@ -141,18 +142,20 @@ def run_epoch(
     total_count = 0
 
     for x, y in loader:
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
         if training:
             optimizer.zero_grad(set_to_none=True)
 
-        with autocast(enabled=amp_enabled):
-            logits = model(x)
-            if task == "regression":
-                loss = loss_fn(logits.squeeze(-1), y)
-            else:
-                loss = loss_fn(logits, y)
+        eval_context = contextlib.nullcontext() if training else torch.inference_mode()
+        with eval_context:
+            with autocast(enabled=amp_enabled):
+                logits = model(x)
+                if task == "regression":
+                    loss = loss_fn(logits.squeeze(-1), y)
+                else:
+                    loss = loss_fn(logits, y)
 
         if training:
             if scaler is not None:
@@ -194,6 +197,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--class-weights", choices=["auto", "none"], default="none")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--persistent-workers", action="store_true")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--early-stopping-patience", type=int, default=5)
@@ -245,19 +250,25 @@ def main() -> None:
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = GradScaler(enabled=args.amp and device.type == "cuda")
 
+    loader_kwargs: dict[str, Any] = {
+        "num_workers": args.num_workers,
+        "pin_memory": device.type == "cuda",
+    }
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = args.persistent_workers
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
+        **loader_kwargs,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
+        **loader_kwargs,
     )
 
     best_metric = float("inf")
