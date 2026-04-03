@@ -4,9 +4,9 @@ Modernized 3D convolutional neural network tooling for residue-level protein mic
 
 ## Overview
 
-This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized local protein environments and amino-acid environment similarity style learning. The codebase keeps the original 3D CNN spirit while replacing legacy training/data plumbing with maintainable Python + PyTorch workflows.
+This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized local protein environments and amino-acid environment similarity style learning. The codebase keeps the original 3D CNN spirit while replacing legacy training/data plumbing with maintainable Python + PyTorch workflows. Based on work by **Kulikova et al. 2021** box sizes of 12 A are equivalent to the orginal 20 A reported by **Torng & Altman (2017)** and should greatly reduce the voxel database size. 
 
-In addition to the original atom-channel setup, the project is intended to support additional biochemical channels commonly used in structure-based protein engineering workflows (including **hydrogen**, **partial charges**, and **solvent accessibility**) as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
+In addition to the original atom-channel setup, the project will eventually support additional biochemical channels commonly used in structure-based protein engineering workflows (including **hydrogen**, **partial charges**, and **solvent accessibility**) as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
 
 > Original Torng et al. code repository: **(1) TBD**
 
@@ -60,7 +60,7 @@ See script-level usage examples in `scripts/README.md`.
 
 ## Scientific context and references
 
-This codebase is aligned with:
+Other 3DCNN based models:
 
 1. Torng, Wen, and Russ B. Altman. *3D deep convolutional neural networks for amino acid environment similarity analysis.* BMC Bioinformatics 18.1 (2017): 302.
 2. Shroff, Raghav, et al. *A structure-based deep learning framework for protein engineering.* bioRxiv (2019): 833905.
