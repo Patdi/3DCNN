@@ -325,7 +325,7 @@ Example:
 python scripts/predict_residue_identity.py \
   --test-manifest data/splits/test_sites.csv \
   --normalization data/processed/stats/normalization_stats.npz \
-  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
+  --checkpoint outputs/runs/voxel_cnn_pretrain/best_val.pt \
   --output-csv outputs/runs/voxel_cnn_pretrain/predictions_test.csv \
   --batch-size 64 \
   --top-k 3 \
