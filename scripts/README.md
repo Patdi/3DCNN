@@ -315,6 +315,40 @@ python scripts/build_activity_dataset.py \
   --task regression
 ```
 
+## `predict_residue_identity.py`
+
+Run inference for residue identity from a trained voxel CNN checkpoint and write predictions to CSV.
+
+Example:
+
+```bash
+python scripts/predict_residue_identity.py \
+  --test-manifest data/splits/test_sites.csv \
+  --normalization data/processed/stats/normalization_stats.npz \
+  --checkpoint outputs/runs/voxel_cnn_pretrain/checkpoints/best_val.pt \
+  --output-csv outputs/runs/voxel_cnn_pretrain/predictions_test.csv \
+  --batch-size 64 \
+  --top-k 3 \
+  --output-probs
+```
+
+Minimal required args:
+
+- `--test-manifest`
+- `--normalization`
+- `--checkpoint`
+- `--output-csv`
+
+Useful extras:
+
+- `--batch-size`
+- `--device`
+- `--num-workers`
+- `--amp`
+- `--top-k`
+- `--output-probs`
+- `--verbose`
+
 ## `constants.py`
 
 Shared constants imported by evaluation/analysis code (for example, residue label-to-group mappings used by `evaluate_model.py`).
