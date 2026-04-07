@@ -223,6 +223,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-png", type=Path, default=None)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--max-confusions", type=int, default=50)
+    parser.add_argument("--aa-support-csv", type=Path, default=None)
+    parser.add_argument("--aa-support-png", type=Path, default=None)
+    parser.add_argument("--aa-type-accuracy-csv", type=Path, default=None)
+    parser.add_argument("--aa-type-accuracy-png", type=Path, default=None)
+    parser.add_argument("--entropy-summary-csv", type=Path, default=None)
+    parser.add_argument("--entropy-hist-png", type=Path, default=None)
+    parser.add_argument("--save-embeddings-npz", type=Path, default=None)
+    parser.add_argument("--embedding-plot-png", type=Path, default=None)
+    parser.add_argument("--embedding-method", choices=["none", "pca", "umap"], default="none")
+    parser.add_argument("--embedding-max-samples", type=int, default=5000)
+    parser.add_argument(
+        "--embedding-color-by",
+        choices=["actual", "predicted", "actual_type", "predicted_type"],
+        default="actual_type",
+    )
+    parser.add_argument("--embedding-layer", choices=["penultimate", "logits"], default="penultimate")
     parser.add_argument(
         "--normalize-confusion",
         choices=["none", "row", "column", "all"],
@@ -555,6 +571,232 @@ def aa_type(label: str) -> str:
     return AMINO_ACID_PROPERTIES.get(canonical, "Unknown")
 
 
+def compute_support_per_aa(actual_labels: list[str], aa_labels: list[str]) -> list[dict[str, int | str]]:
+    counts = {label: 0 for label in aa_labels}
+    for label in actual_labels:
+        canonical = canonicalize_aa_label(label)
+        if canonical in counts:
+            counts[canonical] += 1
+    return [{"amino_acid": label, "support": counts[label]} for label in aa_labels]
+
+
+def write_support_csv(rows: list[dict[str, int | str]], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["amino_acid", "support"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def save_support_bar_chart(rows: list[dict[str, int | str]], out_path: Path) -> None:
+    labels = [str(row["amino_acid"]) for row in rows]
+    values = [int(row["support"]) for row in rows]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(labels, values, color="tab:blue")
+    ax.set_xlabel("amino acid")
+    ax.set_ylabel("count")
+    ax.set_title("Test Support per Amino Acid")
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def compute_accuracy_by_type(
+    actual_types: list[str],
+    predicted_types: list[str],
+    type_order: list[str],
+) -> list[dict[str, int | float | str]]:
+    stats = {t: {"support": 0, "correct": 0} for t in type_order}
+    for actual, predicted in zip(actual_types, predicted_types):
+        actual_t = actual if actual in stats else "Unknown"
+        predicted_t = predicted if predicted in stats else "Unknown"
+        stats[actual_t]["support"] += 1
+        stats[actual_t]["correct"] += int(actual_t == predicted_t)
+    rows: list[dict[str, int | float | str]] = []
+    for t in type_order:
+        support = int(stats[t]["support"])
+        correct = int(stats[t]["correct"])
+        rows.append(
+            {
+                "amino_acid_type": t,
+                "support": support,
+                "correct": correct,
+                "accuracy": (correct / support) if support > 0 else 0.0,
+            }
+        )
+    return rows
+
+
+def write_type_accuracy_csv(rows: list[dict[str, int | float | str]], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["amino_acid_type", "support", "correct", "accuracy"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def save_type_accuracy_bar_chart(rows: list[dict[str, int | float | str]], out_path: Path) -> None:
+    labels = [str(row["amino_acid_type"]) for row in rows]
+    accuracies = [float(row["accuracy"]) for row in rows]
+    supports = [int(row["support"]) for row in rows]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    bars = ax.bar(labels, accuracies, color="tab:purple")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("amino acid type")
+    ax.set_ylabel("accuracy")
+    ax.set_title("Accuracy by Amino Acid Type")
+    plt.setp(ax.get_xticklabels(), rotation=25, ha="right")
+    for bar, support in zip(bars, supports):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            min(bar.get_height() + 0.02, 1.0),
+            f"n={support}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def compute_entropy(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    probs = np.asarray(probs, dtype=np.float64)
+    return -np.sum(probs * np.log(probs + eps), axis=1)
+
+
+def summarize_entropy(
+    entropies: list[float],
+    confidences: list[float],
+    correct_flags: list[bool],
+) -> dict[str, float]:
+    e = np.asarray(entropies, dtype=np.float64)
+    c = np.asarray(confidences, dtype=np.float64)
+    f = np.asarray(correct_flags, dtype=bool)
+    out: dict[str, float] = {
+        "num_samples": float(e.size),
+        "mean_entropy": float(np.mean(e)) if e.size else float("nan"),
+        "median_entropy": float(np.median(e)) if e.size else float("nan"),
+        "std_entropy": float(np.std(e)) if e.size else float("nan"),
+        "min_entropy": float(np.min(e)) if e.size else float("nan"),
+        "max_entropy": float(np.max(e)) if e.size else float("nan"),
+        "mean_confidence": float(np.mean(c)) if c.size else float("nan"),
+        "mean_entropy_correct": float(np.mean(e[f])) if np.any(f) else float("nan"),
+        "mean_entropy_incorrect": float(np.mean(e[~f])) if np.any(~f) else float("nan"),
+        "mean_confidence_correct": float(np.mean(c[f])) if np.any(f) else float("nan"),
+        "mean_confidence_incorrect": float(np.mean(c[~f])) if np.any(~f) else float("nan"),
+    }
+    return out
+
+
+def write_entropy_summary_csv(summary: dict[str, float], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["metric", "value"])
+        writer.writeheader()
+        for metric, value in summary.items():
+            writer.writerow({"metric": metric, "value": value})
+
+
+def save_entropy_histogram(
+    entropies: list[float],
+    correct_flags: list[bool],
+    out_path: Path,
+) -> None:
+    entropy_arr = np.asarray(entropies, dtype=np.float64)
+    flags = np.asarray(correct_flags, dtype=bool)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.hist(entropy_arr, bins=30, alpha=0.35, color="tab:blue", label="All")
+    if entropy_arr.size and flags.size == entropy_arr.size:
+        ax.hist(entropy_arr[flags], bins=30, alpha=0.45, color="tab:green", label="Correct")
+        ax.hist(entropy_arr[~flags], bins=30, alpha=0.45, color="tab:red", label="Incorrect")
+    ax.set_title("Prediction Entropy Histogram")
+    ax.set_xlabel("entropy (natural log)")
+    ax.set_ylabel("count")
+    ax.legend(loc="best")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def extract_embeddings(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    layer: str,
+) -> torch.Tensor:
+    if layer == "logits":
+        return model(x)
+    if layer == "penultimate":
+        if hasattr(model, "features") and hasattr(model, "classifier"):
+            features = model.features(x)
+            flattened = features.flatten(1)
+            return model.classifier(flattened)
+        return model(x)
+    raise ValueError(f"Unsupported embedding layer: {layer}")
+
+
+def reduce_embeddings_pca(embeddings: np.ndarray, n_components: int = 2) -> np.ndarray:
+    if embeddings.shape[0] == 0:
+        return np.zeros((0, n_components), dtype=np.float64)
+    if embeddings.shape[1] < n_components:
+        pad = np.zeros((embeddings.shape[0], n_components - embeddings.shape[1]), dtype=np.float64)
+        return np.concatenate([embeddings, pad], axis=1)
+
+    try:
+        from sklearn.decomposition import PCA  # type: ignore
+
+        return PCA(n_components=n_components, random_state=0).fit_transform(embeddings)
+    except Exception:
+        centered = embeddings - np.mean(embeddings, axis=0, keepdims=True)
+        _, _, vt = np.linalg.svd(centered, full_matrices=False)
+        basis = vt[:n_components].T
+        return centered @ basis
+
+
+def reduce_embeddings_umap(embeddings: np.ndarray, n_components: int = 2) -> np.ndarray | None:
+    try:
+        import umap  # type: ignore
+    except ImportError:
+        return None
+    reducer = umap.UMAP(n_components=n_components, random_state=0)
+    return reducer.fit_transform(embeddings)
+
+
+def save_embedding_plot(
+    embedding_2d: np.ndarray,
+    labels: list[str],
+    out_path: Path,
+    title: str,
+) -> None:
+    unique_labels = sorted(set(labels))
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for label in unique_labels:
+        mask = np.asarray([item == label for item in labels], dtype=bool)
+        ax.scatter(
+            embedding_2d[mask, 0],
+            embedding_2d[mask, 1],
+            s=14,
+            alpha=0.65,
+            label=label,
+        )
+    ax.set_xlabel("dim 1")
+    ax.set_ylabel("dim 2")
+    ax.set_title(title)
+    if len(unique_labels) <= 12:
+        ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
 def init_confusion(labels: list[str]) -> dict[str, dict[str, int]]:
     return {actual: {predicted: 0 for predicted in labels} for actual in labels}
 
@@ -733,6 +975,8 @@ def predict(
     output_probs: bool,
     amp_enabled: bool,
     verbose: bool,
+    collect_embedding_data: bool,
+    embedding_layer: str,
 ) -> tuple[
     list[dict[str, str]],
     dict[str, dict[str, int]],
@@ -751,7 +995,17 @@ def predict(
     eval_predicted_labels: list[str] = []
     eval_confidences: list[float] = []
     eval_correct_flags: list[bool] = []
+    eval_entropies: list[float] = []
+    eval_actual_types: list[str] = []
+    eval_predicted_types: list[str] = []
     correct_type = 0
+    embedding_vectors: list[np.ndarray] = []
+    embedding_structure_names: list[str] = []
+    embedding_sites: list[str] = []
+    embedding_actual_labels: list[str] = []
+    embedding_predicted_labels: list[str] = []
+    embedding_actual_types: list[str] = []
+    embedding_predicted_types: list[str] = []
 
     model.eval()
     with torch.inference_mode():
@@ -760,6 +1014,12 @@ def predict(
 
             with autocast(enabled=amp_enabled):
                 logits = model(x)
+                if collect_embedding_data:
+                    embeddings_tensor = (
+                        logits if embedding_layer == "logits" else extract_embeddings(model, x, embedding_layer)
+                    )
+                else:
+                    embeddings_tensor = None
 
             probs = F.softmax(logits, dim=1)
             preds = torch.argmax(logits, dim=1)
@@ -769,6 +1029,13 @@ def predict(
             pred_indices = preds.detach().cpu().numpy().astype(int)
             topk_indices_np = topk_indices.detach().cpu().numpy().astype(int)
             topk_probs_np = topk_probs.detach().cpu().numpy().astype(np.float32)
+            probs_np = probs.detach().cpu().numpy().astype(np.float64)
+            entropy_np = compute_entropy(probs_np)
+            embeddings_np = (
+                embeddings_tensor.detach().cpu().numpy().astype(np.float32)
+                if embeddings_tensor is not None
+                else None
+            )
 
             for i, pred_idx in enumerate(pred_indices):
                 row = batch["rows"][i]
@@ -792,6 +1059,9 @@ def predict(
                     eval_predicted_labels.append(predicted_label)
                     eval_confidences.append(float(topk_probs_np[i][0]))
                     eval_correct_flags.append(pred_idx == actual_idx)
+                    eval_entropies.append(float(entropy_np[i]))
+                    eval_actual_types.append(actual_type)
+                    eval_predicted_types.append(predicted_type)
 
                 out_row = {
                     "structure_name": infer_structure_name(row, sample_path),
@@ -800,6 +1070,7 @@ def predict(
                     "actual": actual_label,
                     "predicted_type": predicted_type,
                     "actual_type": actual_type,
+                    "entropy": f"{float(entropy_np[i]):.6f}",
                 }
 
                 if output_probs:
@@ -817,6 +1088,15 @@ def predict(
                 if verbose and actual_idx is None:
                     print(f"No ground truth for sample: {sample_path}")
 
+                if embeddings_np is not None:
+                    embedding_vectors.append(embeddings_np[i])
+                    embedding_structure_names.append(out_row["structure_name"])
+                    embedding_sites.append(out_row["site"])
+                    embedding_actual_labels.append(actual_label if actual_label else "Unknown")
+                    embedding_predicted_labels.append(predicted_label)
+                    embedding_actual_types.append(actual_type if actual_type else "Unknown")
+                    embedding_predicted_types.append(predicted_type)
+
                 rows_out.append(out_row)
 
     type_accuracy = (correct_type / with_actual) if with_actual > 0 else float("nan")
@@ -832,8 +1112,18 @@ def predict(
         "amino_acid_type_accuracy": type_accuracy,
         "actual_labels": eval_actual_labels,
         "predicted_labels": eval_predicted_labels,
+        "actual_types": eval_actual_types,
+        "predicted_types": eval_predicted_types,
         "confidences": eval_confidences,
+        "entropies": eval_entropies,
         "correct_flags": eval_correct_flags,
+        "embeddings": embedding_vectors,
+        "embedding_structure_names": embedding_structure_names,
+        "embedding_sites": embedding_sites,
+        "embedding_actual_labels": embedding_actual_labels,
+        "embedding_predicted_labels": embedding_predicted_labels,
+        "embedding_actual_types": embedding_actual_types,
+        "embedding_predicted_types": embedding_predicted_types,
     }
     return rows_out, aa_confusion, aa_type_confusion, summary
 
@@ -879,27 +1169,6 @@ def main() -> None:
         parsed_topk_values.append(args.top_k)
     parsed_topk_values = sorted(set(parsed_topk_values))
 
-    rows_out, aa_confusion, aa_type_confusion, summary = predict(
-        model=model,
-        loader=loader,
-        device=device,
-        idx_map=idx_map,
-        topk_values=parsed_topk_values,
-        output_probs=args.output_probs,
-        amp_enabled=args.amp and device.type == "cuda",
-        verbose=args.verbose,
-    )
-
-    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["structure_name", "site", "predicted", "actual", "predicted_type", "actual_type"]
-    if args.output_probs:
-        fieldnames.extend(["predicted_index", "actual_index", "confidence", "topk_indices", "topk_labels"])
-
-    with args.output_csv.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows_out)
-
     output_stem = args.output_csv.stem
     output_parent = args.output_csv.parent
     aa_confusion_csv = args.aa_confusion_csv or (output_parent / f"{output_stem}_aa_confusion.csv")
@@ -918,6 +1187,43 @@ def main() -> None:
         output_parent / f"{output_stem}_confidence_hist.png"
     )
     calibration_png = args.calibration_png or (output_parent / f"{output_stem}_calibration.png")
+    aa_support_csv = args.aa_support_csv or (output_parent / f"{output_stem}_aa_support.csv")
+    aa_support_png = args.aa_support_png or (output_parent / f"{output_stem}_aa_support.png")
+    aa_type_accuracy_csv = args.aa_type_accuracy_csv or (
+        output_parent / f"{output_stem}_aa_type_accuracy.csv"
+    )
+    aa_type_accuracy_png = args.aa_type_accuracy_png or (
+        output_parent / f"{output_stem}_aa_type_accuracy.png"
+    )
+    entropy_summary_csv = args.entropy_summary_csv or (output_parent / f"{output_stem}_entropy_summary.csv")
+    entropy_hist_png = args.entropy_hist_png or (output_parent / f"{output_stem}_entropy_hist.png")
+    embeddings_npz = args.save_embeddings_npz or (output_parent / f"{output_stem}_embeddings.npz")
+    embedding_plot_png = args.embedding_plot_png or (output_parent / f"{output_stem}_embedding_plot.png")
+
+    collect_embedding_data = args.embedding_method != "none" or args.save_embeddings_npz is not None
+    rows_out, aa_confusion, aa_type_confusion, summary = predict(
+        model=model,
+        loader=loader,
+        device=device,
+        idx_map=idx_map,
+        topk_values=parsed_topk_values,
+        output_probs=args.output_probs,
+        amp_enabled=args.amp and device.type == "cuda",
+        verbose=args.verbose,
+        collect_embedding_data=collect_embedding_data,
+        embedding_layer=args.embedding_layer,
+    )
+
+    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["structure_name", "site", "predicted", "actual", "predicted_type", "actual_type"]
+    fieldnames.append("entropy")
+    if args.output_probs:
+        fieldnames.extend(["predicted_index", "actual_index", "confidence", "topk_indices", "topk_labels"])
+
+    with args.output_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows_out)
 
     aa_labels = canonical_aa_labels()
     aa_type_labels = list(CANONICAL_AA_TYPES)
@@ -965,6 +1271,85 @@ def main() -> None:
             args.calibration_bins,
         )
         save_calibration_plot(calibration_bins, calibration_png)
+        support_rows = compute_support_per_aa(summary["actual_labels"], aa_labels)
+        write_support_csv(support_rows, aa_support_csv)
+        save_support_bar_chart(support_rows, aa_support_png)
+
+        type_accuracy_rows = compute_accuracy_by_type(
+            summary["actual_types"],
+            summary["predicted_types"],
+            aa_type_labels,
+        )
+        write_type_accuracy_csv(type_accuracy_rows, aa_type_accuracy_csv)
+        save_type_accuracy_bar_chart(type_accuracy_rows, aa_type_accuracy_png)
+
+        entropy_summary = summarize_entropy(
+            summary["entropies"],
+            summary["confidences"],
+            summary["correct_flags"],
+        )
+        write_entropy_summary_csv(entropy_summary, entropy_summary_csv)
+        save_entropy_histogram(summary["entropies"], summary["correct_flags"], entropy_hist_png)
+
+    embedding_plot_written = False
+    if collect_embedding_data and summary["embeddings"]:
+        emb = np.asarray(summary["embeddings"], dtype=np.float32)
+        n_total = emb.shape[0]
+        if args.embedding_max_samples > 0 and n_total > args.embedding_max_samples:
+            rng = np.random.default_rng(args.seed)
+            sample_idx = rng.choice(n_total, size=args.embedding_max_samples, replace=False)
+            sample_idx.sort()
+            emb = emb[sample_idx]
+        else:
+            sample_idx = np.arange(n_total)
+
+        actual_labels = np.asarray(summary["embedding_actual_labels"], dtype=object)
+        predicted_labels = np.asarray(summary["embedding_predicted_labels"], dtype=object)
+        actual_types = np.asarray(summary["embedding_actual_types"], dtype=object)
+        predicted_types = np.asarray(summary["embedding_predicted_types"], dtype=object)
+        structure_names = np.asarray(summary["embedding_structure_names"], dtype=object)
+        sites = np.asarray(summary["embedding_sites"], dtype=object)
+
+        if actual_labels.shape[0] == n_total:
+            np.savez(
+                embeddings_npz,
+                embeddings=emb,
+                actual_labels=actual_labels[sample_idx],
+                predicted_labels=predicted_labels[sample_idx],
+                actual_types=actual_types[sample_idx],
+                predicted_types=predicted_types[sample_idx],
+                structure_names=structure_names[sample_idx],
+                sites=sites[sample_idx],
+            )
+
+        if args.embedding_method != "none":
+            reduced: np.ndarray | None = None
+            method = args.embedding_method
+            if method == "pca":
+                reduced = reduce_embeddings_pca(emb.astype(np.float64), n_components=2)
+            elif method == "umap":
+                reduced = reduce_embeddings_umap(emb.astype(np.float64), n_components=2)
+                if reduced is None:
+                    print("UMAP unavailable (umap-learn not installed); falling back to PCA.")
+                    method = "pca"
+                    reduced = reduce_embeddings_pca(emb.astype(np.float64), n_components=2)
+
+            if reduced is not None:
+                color_values_map = {
+                    "actual": actual_labels[sample_idx].tolist(),
+                    "predicted": predicted_labels[sample_idx].tolist(),
+                    "actual_type": actual_types[sample_idx].tolist(),
+                    "predicted_type": predicted_types[sample_idx].tolist(),
+                }
+                color_values = color_values_map[args.embedding_color_by]
+                save_embedding_plot(
+                    reduced,
+                    color_values,
+                    embedding_plot_png,
+                    f"{method.upper()} of {args.embedding_layer.capitalize()} Embeddings "
+                    f"colored by {args.embedding_color_by}",
+                )
+                embedding_plot_written = True
 
     print(f"Total samples: {summary['total_samples']}")
     print(f"Labeled samples used for evaluation: {summary['labeled_samples']}")
@@ -993,6 +1378,38 @@ def main() -> None:
     print(
         "Weighted precision / recall / F1: "
         f"{weighted_avg['precision']:.4f} / {weighted_avg['recall']:.4f} / {weighted_avg['f1']:.4f}"
+    )
+    if summary["labeled_samples"] > 0:
+        support_rows = compute_support_per_aa(summary["actual_labels"], aa_labels)
+        support_values = [int(row["support"]) for row in support_rows]
+        print(f"Support min/max across amino acids: {min(support_values)} / {max(support_values)}")
+
+        type_accuracy_rows = compute_accuracy_by_type(
+            summary["actual_types"],
+            summary["predicted_types"],
+            aa_type_labels,
+        )
+        print("Amino acid type accuracies:")
+        for row in type_accuracy_rows:
+            print(
+                f"  {row['amino_acid_type']}: {float(row['accuracy']):.4f} "
+                f"(n={int(row['support'])}, correct={int(row['correct'])})"
+            )
+
+        entropy_summary = summarize_entropy(
+            summary["entropies"],
+            summary["confidences"],
+            summary["correct_flags"],
+        )
+        print(f"Mean entropy overall (natural log): {entropy_summary['mean_entropy']:.4f}")
+        print(
+            "Mean entropy (correct / incorrect): "
+            f"{entropy_summary['mean_entropy_correct']:.4f} / "
+            f"{entropy_summary['mean_entropy_incorrect']:.4f}"
+        )
+    print(
+        "Embedding plot: "
+        f"{'written to ' + str(embedding_plot_png) if embedding_plot_written else 'skipped'}"
     )
 
 
