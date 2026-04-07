@@ -9,6 +9,7 @@ import random
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -212,6 +213,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--aa-confusion-csv", type=Path, default=None)
     parser.add_argument("--aa-type-confusion-csv", type=Path, default=None)
+    parser.add_argument("--aa-confusion-png", type=Path, default=None)
+    parser.add_argument("--aa-type-confusion-png", type=Path, default=None)
+    parser.add_argument(
+        "--normalize-confusion",
+        choices=["none", "row", "column", "all"],
+        default="row",
+    )
     return parser.parse_args()
 
 
@@ -316,6 +324,72 @@ def write_confusion_csv(
         writer.writerow([header_label, *labels])
         for actual in labels:
             writer.writerow([actual, *[confusion[actual][predicted] for predicted in labels]])
+
+
+def confusion_to_array(confusion: dict[str, dict[str, int]], labels: list[str]) -> np.ndarray:
+    return np.asarray(
+        [[confusion[actual][predicted] for predicted in labels] for actual in labels],
+        dtype=np.int64,
+    )
+
+
+def normalize_confusion_matrix(matrix: np.ndarray, mode: str) -> np.ndarray:
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if mode == "none":
+        return matrix
+    if mode == "row":
+        sums = matrix.sum(axis=1, keepdims=True)
+        return np.divide(matrix, sums, out=np.zeros_like(matrix), where=sums != 0)
+    if mode == "column":
+        sums = matrix.sum(axis=0, keepdims=True)
+        return np.divide(matrix, sums, out=np.zeros_like(matrix), where=sums != 0)
+    if mode == "all":
+        total = matrix.sum()
+        if total == 0:
+            return np.zeros_like(matrix)
+        return matrix / total
+    raise ValueError(f"Unsupported normalization mode: {mode}")
+
+
+def save_confusion_heatmap(
+    matrix: np.ndarray,
+    labels: list[str],
+    out_path: Path,
+    title: str,
+    normalize_mode: str,
+) -> None:
+    display_matrix = normalize_confusion_matrix(matrix, normalize_mode)
+    mode_label = "raw counts" if normalize_mode == "none" else f"{normalize_mode}-normalized"
+    annotate = ("type" in title.lower()) or (len(labels) <= 20)
+
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 0.35), max(4, len(labels) * 0.35)))
+    im = ax.imshow(display_matrix, interpolation="nearest", aspect="auto")
+    ax.figure.colorbar(im, ax=ax)
+
+    ax.set_xticks(np.arange(len(labels)))
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_yticklabels(labels)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    ax.set_title(f"{title} ({mode_label})")
+
+    if annotate:
+        for i in range(display_matrix.shape[0]):
+            for j in range(display_matrix.shape[1]):
+                text = (
+                    f"{int(matrix[i, j])}"
+                    if normalize_mode == "none"
+                    else f"{display_matrix[i, j]:.2f}"
+                )
+                ax.text(j, i, text, ha="center", va="center", fontsize=7)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
 
 
 def label_to_index(label: str) -> int | None:
@@ -551,13 +625,34 @@ def main() -> None:
     aa_type_confusion_csv = args.aa_type_confusion_csv or (
         output_parent / f"{output_stem}_aa_type_confusion.csv"
     )
+    aa_confusion_png = args.aa_confusion_png or (output_parent / f"{output_stem}_aa_confusion.png")
+    aa_type_confusion_png = args.aa_type_confusion_png or (
+        output_parent / f"{output_stem}_aa_type_confusion.png"
+    )
 
-    write_confusion_csv(aa_confusion, canonical_aa_labels(), aa_confusion_csv, "actual/predicted")
+    aa_labels = canonical_aa_labels()
+    aa_type_labels = list(CANONICAL_AA_TYPES)
+
+    write_confusion_csv(aa_confusion, aa_labels, aa_confusion_csv, "actual/predicted")
     write_confusion_csv(
         aa_type_confusion,
-        list(CANONICAL_AA_TYPES),
+        aa_type_labels,
         aa_type_confusion_csv,
         "actual_type/predicted_type",
+    )
+    save_confusion_heatmap(
+        matrix=confusion_to_array(aa_confusion, aa_labels),
+        labels=aa_labels,
+        out_path=aa_confusion_png,
+        title="Amino Acid Confusion Matrix",
+        normalize_mode=args.normalize_confusion,
+    )
+    save_confusion_heatmap(
+        matrix=confusion_to_array(aa_type_confusion, aa_type_labels),
+        labels=aa_type_labels,
+        out_path=aa_type_confusion_png,
+        title="Amino Acid Type Confusion Matrix",
+        normalize_mode=args.normalize_confusion,
     )
 
     print(f"Total samples: {len(rows_out)}")
