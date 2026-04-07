@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add solvent accessibility metrics to residue-identity predictions and plot accuracy by SASA bin."""
+"""Add solvent accessibility metrics to residue-identity predictions and plot SASA/accuracy summaries."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pdb-root", required=True, type=Path)
     parser.add_argument("--output-csv", required=True, type=Path)
     parser.add_argument("--plot-png", required=True, type=Path)
+    parser.add_argument("--plot-mode", choices=["line", "boxplot"], default="boxplot")
 
     parser.add_argument("--sasa-kind", choices=["absolute", "relative"], default="relative")
     parser.add_argument(
@@ -328,6 +329,91 @@ def save_accuracy_plot(
     plt.close()
 
 
+def build_sasa_correctness_groups(rows: Sequence[dict]) -> Tuple[List[List[float]], List[str]]:
+    groups = {
+        "top1_correct": [],
+        "top1_incorrect": [],
+        "top3_correct": [],
+        "top3_incorrect": [],
+        "top5_correct": [],
+        "top5_incorrect": [],
+    }
+
+    for row in rows:
+        val = row.get("sasa_selected")
+        actual = normalize_residue_3letter(row.get("actual") or "", output_case="title")
+        predicted = normalize_residue_3letter(row.get("predicted") or "", output_case="title")
+        if val in (None, "") or not actual:
+            continue
+
+        sasa_value = float(val)
+        topk = parse_topk_labels(row.get("topk_labels") or "")
+
+        top1_correct = predicted == actual
+        top3_correct = actual in topk[:3]
+        top5_correct = actual in topk[:5]
+
+        groups["top1_correct" if top1_correct else "top1_incorrect"].append(sasa_value)
+        groups["top3_correct" if top3_correct else "top3_incorrect"].append(sasa_value)
+        groups["top5_correct" if top5_correct else "top5_incorrect"].append(sasa_value)
+
+    ordered_keys = [
+        "top1_correct",
+        "top1_incorrect",
+        "top3_correct",
+        "top3_incorrect",
+        "top5_correct",
+        "top5_incorrect",
+    ]
+    label_prefixes = [
+        "Top1 Correct",
+        "Top1 Incorrect",
+        "Top3 Correct",
+        "Top3 Incorrect",
+        "Top5 Correct",
+        "Top5 Incorrect",
+    ]
+    ordered_groups = [groups[key] for key in ordered_keys]
+    labels = [f"{prefix} (n={len(group)})" for prefix, group in zip(label_prefixes, ordered_groups)]
+    return ordered_groups, labels
+
+
+def save_sasa_boxplot(groups: Sequence[Sequence[float]], labels: Sequence[str], out_path: Path) -> None:
+    plt.figure(figsize=(12, 6))
+    positions = []
+    data = []
+    valid_labels = []
+    colors = []
+
+    for idx, (group, label) in enumerate(zip(groups, labels), start=1):
+        if not group:
+            print(f"[WARN] No samples for group '{label}', skipping.")
+            continue
+        positions.append(idx)
+        data.append(group)
+        valid_labels.append(label)
+        colors.append("#4CAF50" if "Correct" in label else "#F44336")
+
+    if not data:
+        raise ValueError("No groups with samples available for boxplot.")
+
+    box = plt.boxplot(data, positions=positions, labels=valid_labels, patch_artist=True, showfliers=False)
+    for patch, color in zip(box["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+
+    plt.title("Solvent Accessibility Distribution by Prediction Accuracy")
+    plt.xlabel("Prediction Group")
+    plt.ylabel("Solvent Accessibility")
+    plt.xticks(rotation=30, ha="right")
+    plt.grid(axis="y", alpha=0.25)
+    plt.tight_layout()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+
 def write_augmented_predictions_csv(rows: Sequence[dict], output_csv: Path, original_fields: Sequence[str]) -> None:
     appended = [
         "chain_id",
@@ -504,12 +590,17 @@ def main() -> None:
 
     rows_for_bins = [r for r in pred_rows if r.get("sasa_selected") not in (None, "") and (r.get("actual") or "").strip()]
     if not rows_for_bins:
-        raise ValueError("No rows available for binned accuracy (need valid actual + sasa_selected)")
+        raise ValueError("No rows available for plotting (need valid actual + sasa_selected)")
 
     sasa_values = [float(r["sasa_selected"]) for r in rows_for_bins]
     bin_edges = assign_bins(sasa_values, args.binning, args.num_bins, args.custom_bins)
     binned = compute_binned_accuracies(rows_for_bins, bin_edges)
-    save_accuracy_plot(binned, bin_edges, args.plot_png, args.sasa_kind, args.sasa_field)
+
+    if args.plot_mode == "line":
+        save_accuracy_plot(binned, bin_edges, args.plot_png, args.sasa_kind, args.sasa_field)
+    else:
+        groups, labels = build_sasa_correctness_groups(rows_for_bins)
+        save_sasa_boxplot(groups, labels, args.plot_png)
 
     if args.summary_json:
         summary = {
