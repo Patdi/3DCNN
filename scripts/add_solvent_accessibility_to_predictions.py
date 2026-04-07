@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plot-png", required=True, type=Path)
     parser.add_argument(
         "--plot-mode",
-        choices=["line", "grouped_bar", "sasa_boxplot", "sasa_violin"],
+        choices=["line", "grouped_bar", "sasa_boxplot", "sasa_violin", "all"],
         default="line",
     )
 
@@ -472,6 +472,17 @@ def save_sasa_violinplot(
     plt.close(fig)
 
 
+def derive_plot_paths(base_path: Path) -> Dict[str, Path]:
+    suffix = base_path.suffix if base_path.suffix else ".png"
+    stem = base_path.stem if base_path.suffix else base_path.name
+    return {
+        "line": base_path.parent / f"{stem}_line{suffix}",
+        "grouped_bar": base_path.parent / f"{stem}_grouped_bar{suffix}",
+        "sasa_boxplot": base_path.parent / f"{stem}_sasa_boxplot{suffix}",
+        "sasa_violin": base_path.parent / f"{stem}_sasa_violin{suffix}",
+    }
+
+
 def write_augmented_predictions_csv(rows: Sequence[dict], output_csv: Path, original_fields: Sequence[str]) -> None:
     appended = [
         "chain_id",
@@ -653,19 +664,32 @@ def main() -> None:
     sasa_values = [float(r["sasa_selected"]) for r in rows_for_bins]
     bin_edges = assign_bins(sasa_values, args.binning, args.num_bins, args.custom_bins)
     binned = compute_binned_accuracies(rows_for_bins, bin_edges)
-
-    if args.plot_mode == "line":
-        save_accuracy_plot(binned, bin_edges, args.plot_png, args.sasa_kind, args.sasa_field)
-    elif args.plot_mode == "grouped_bar":
-        save_grouped_bar_accuracy_plot(binned, args.plot_png, args.sasa_kind, args.sasa_field)
-    elif args.plot_mode == "sasa_boxplot":
-        sasa_groups = build_sasa_groups_by_correctness(rows_for_bins)
-        save_sasa_boxplot(sasa_groups, args.plot_png, args.sasa_kind, args.sasa_field)
-    elif args.plot_mode == "sasa_violin":
-        sasa_groups = build_sasa_groups_by_correctness(rows_for_bins)
-        save_sasa_violinplot(sasa_groups, args.plot_png, args.sasa_kind, args.sasa_field)
+    generated_plot_paths: Dict[str, Path]
+    if args.plot_mode == "all":
+        generated_plot_paths = derive_plot_paths(args.plot_png)
     else:
-        raise ValueError(f"Unsupported plot mode '{args.plot_mode}'")
+        generated_plot_paths = {args.plot_mode: args.plot_png}
+
+    plot_modes = list(generated_plot_paths.keys())
+    sasa_groups: Optional[Dict[str, List[float]]] = None
+    if "sasa_boxplot" in plot_modes or "sasa_violin" in plot_modes:
+        sasa_groups = build_sasa_groups_by_correctness(rows_for_bins)
+
+    for mode, output_path in generated_plot_paths.items():
+        if mode == "line":
+            save_accuracy_plot(binned, bin_edges, output_path, args.sasa_kind, args.sasa_field)
+        elif mode == "grouped_bar":
+            save_grouped_bar_accuracy_plot(binned, output_path, args.sasa_kind, args.sasa_field)
+        elif mode == "sasa_boxplot":
+            if sasa_groups is None:
+                raise ValueError("SASA groups were not computed for boxplot")
+            save_sasa_boxplot(sasa_groups, output_path, args.sasa_kind, args.sasa_field)
+        elif mode == "sasa_violin":
+            if sasa_groups is None:
+                raise ValueError("SASA groups were not computed for violin plot")
+            save_sasa_violinplot(sasa_groups, output_path, args.sasa_kind, args.sasa_field)
+        else:
+            raise ValueError(f"Unsupported plot mode '{mode}'")
 
     if args.summary_json:
         summary = {
@@ -681,6 +705,7 @@ def main() -> None:
                 "sasa_field": args.sasa_field,
             },
             "plot_mode": args.plot_mode,
+            "generated_plot_paths": [str(path) for path in generated_plot_paths.values()],
             "binning": {
                 "mode": args.binning,
                 "num_bins": args.num_bins,
@@ -695,7 +720,11 @@ def main() -> None:
 
     if args.verbose:
         print(f"Wrote augmented predictions CSV: {args.output_csv}")
-        print(f"Wrote SASA accuracy plot: {args.plot_png}")
+        if args.plot_mode == "all":
+            for mode, path in generated_plot_paths.items():
+                print(f"Wrote {mode} plot: {path}")
+        else:
+            print(f"Wrote SASA accuracy plot: {generated_plot_paths[args.plot_mode]}")
         if args.summary_json:
             print(f"Wrote summary JSON: {args.summary_json}")
 
