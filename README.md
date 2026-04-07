@@ -8,7 +8,7 @@ This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized l
 
 In addition to the original atom-channel setup, the project will eventually support additional biochemical channels commonly used in structure-based protein engineering workflows (including **hydrogen**, **partial charges**, and **solvent accessibility**) as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
 
-> Original Torng et al. code repository: **(1) TBD**
+> Original Torng et al. code repository: (http://archive.simtk.org/wtorng/)
 
 ## What is in this repository
 
