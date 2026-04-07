@@ -135,7 +135,7 @@ def resolve_prediction_row(
 
 
 def pdb_path_for_structure(structure_id: str, pdb_root: Path) -> Path:
-    return pdb_root / f"{structure_id}.PDB"
+    return pdb_root / f"{structure_id}.pdb"
 
 
 def select_sasa_value(residue_area, sasa_kind: str, sasa_field: str) -> float:
