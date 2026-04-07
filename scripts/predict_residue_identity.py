@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import random
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -209,18 +210,275 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1337)
 
     parser.add_argument("--top-k", type=int, default=1)
+    parser.add_argument("--topk-values", default="1,3,5")
     parser.add_argument("--output-probs", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--aa-confusion-csv", type=Path, default=None)
     parser.add_argument("--aa-type-confusion-csv", type=Path, default=None)
     parser.add_argument("--aa-confusion-png", type=Path, default=None)
     parser.add_argument("--aa-type-confusion-png", type=Path, default=None)
+    parser.add_argument("--per-class-metrics-csv", type=Path, default=None)
+    parser.add_argument("--confusions-csv", type=Path, default=None)
+    parser.add_argument("--confidence-hist-png", type=Path, default=None)
+    parser.add_argument("--calibration-png", type=Path, default=None)
+    parser.add_argument("--calibration-bins", type=int, default=10)
+    parser.add_argument("--max-confusions", type=int, default=50)
     parser.add_argument(
         "--normalize-confusion",
         choices=["none", "row", "column", "all"],
         default="row",
     )
     return parser.parse_args()
+
+
+def parse_topk_values(s: str) -> list[int]:
+    ks: list[int] = []
+    for chunk in s.split(","):
+        text = chunk.strip()
+        if not text:
+            continue
+        value = int(text)
+        if value <= 0:
+            raise ValueError(f"Top-k values must be positive integers, got: {value}")
+        ks.append(value)
+    if not ks:
+        raise ValueError("--topk-values produced no valid k values")
+    return sorted(set(ks))
+
+
+def compute_topk_hits(actual_idx: int, topk_indices: np.ndarray, ks: list[int]) -> dict[int, int]:
+    hits: dict[int, int] = {}
+    for k in ks:
+        hits[k] = int(actual_idx in topk_indices[:k])
+    return hits
+
+
+def compute_per_class_metrics(
+    actual_labels: list[str],
+    predicted_labels: list[str],
+    class_labels: list[str],
+) -> tuple[list[dict[str, float | int | str]], dict[str, float], dict[str, float]]:
+    counts = {
+        label: {"tp": 0, "fp": 0, "fn": 0, "support": 0}
+        for label in class_labels
+    }
+
+    for actual, predicted in zip(actual_labels, predicted_labels):
+        if actual not in counts:
+            continue
+        counts[actual]["support"] += 1
+        if actual == predicted:
+            counts[actual]["tp"] += 1
+        else:
+            counts[actual]["fn"] += 1
+            if predicted in counts:
+                counts[predicted]["fp"] += 1
+
+    rows: list[dict[str, float | int | str]] = []
+    precisions: list[float] = []
+    recalls: list[float] = []
+    f1s: list[float] = []
+    supports: list[int] = []
+
+    for label in class_labels:
+        tp = int(counts[label]["tp"])
+        fp = int(counts[label]["fp"])
+        fn = int(counts[label]["fn"])
+        support = int(counts[label]["support"])
+        precision = (tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+        recall = (tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        rows.append(
+            {
+                "amino_acid": label,
+                "support": support,
+                "true_positive": tp,
+                "false_positive": fp,
+                "false_negative": fn,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+            }
+        )
+        precisions.append(precision)
+        recalls.append(recall)
+        f1s.append(f1)
+        supports.append(support)
+
+    total_support = float(sum(supports))
+    macro = {
+        "precision": float(np.mean(precisions)) if precisions else 0.0,
+        "recall": float(np.mean(recalls)) if recalls else 0.0,
+        "f1": float(np.mean(f1s)) if f1s else 0.0,
+    }
+    if total_support > 0:
+        weighted = {
+            "precision": float(np.average(precisions, weights=supports)),
+            "recall": float(np.average(recalls, weights=supports)),
+            "f1": float(np.average(f1s, weights=supports)),
+        }
+    else:
+        weighted = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+    return rows, macro, weighted
+
+
+def write_per_class_metrics_csv(
+    metrics_rows: list[dict[str, float | int | str]],
+    macro: dict[str, float],
+    weighted: dict[str, float],
+    out_path: Path,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "amino_acid",
+        "support",
+        "true_positive",
+        "false_positive",
+        "false_negative",
+        "precision",
+        "recall",
+        "f1",
+    ]
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in metrics_rows:
+            writer.writerow(row)
+        writer.writerow(
+            {
+                "amino_acid": "__macro_avg__",
+                "support": "",
+                "true_positive": "",
+                "false_positive": "",
+                "false_negative": "",
+                "precision": f"{macro['precision']:.6f}",
+                "recall": f"{macro['recall']:.6f}",
+                "f1": f"{macro['f1']:.6f}",
+            }
+        )
+        writer.writerow(
+            {
+                "amino_acid": "__weighted_avg__",
+                "support": "",
+                "true_positive": "",
+                "false_positive": "",
+                "false_negative": "",
+                "precision": f"{weighted['precision']:.6f}",
+                "recall": f"{weighted['recall']:.6f}",
+                "f1": f"{weighted['f1']:.6f}",
+            }
+        )
+
+
+def compute_common_confusions(
+    actual_labels: list[str],
+    predicted_labels: list[str],
+) -> list[tuple[str, str, int]]:
+    counter: Counter[tuple[str, str]] = Counter()
+    for actual, predicted in zip(actual_labels, predicted_labels):
+        if actual != predicted:
+            counter[(actual, predicted)] += 1
+    return [(a, p, c) for (a, p), c in counter.most_common()]
+
+
+def write_common_confusions_csv(
+    confusions: list[tuple[str, str, int]],
+    out_path: Path,
+    max_rows: int,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["rank", "actual", "predicted", "count"])
+        writer.writeheader()
+        for rank, (actual, predicted, count) in enumerate(confusions[:max_rows], start=1):
+            writer.writerow(
+                {
+                    "rank": rank,
+                    "actual": actual,
+                    "predicted": predicted,
+                    "count": count,
+                }
+            )
+
+
+def save_confidence_histogram(
+    confidences: list[float],
+    correct_flags: list[bool],
+    out_path: Path,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    conf = np.asarray(confidences, dtype=np.float64)
+    corr = np.asarray(correct_flags, dtype=bool)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bins = np.linspace(0.0, 1.0, 21)
+    ax.hist(conf, bins=bins, alpha=0.35, label="All", color="tab:blue")
+    ax.hist(conf[corr], bins=bins, alpha=0.45, label="Correct", color="tab:green")
+    ax.hist(conf[~corr], bins=bins, alpha=0.45, label="Incorrect", color="tab:red")
+    ax.set_xlabel("confidence")
+    ax.set_ylabel("count")
+    ax.set_title("Prediction Confidence Histogram")
+    ax.set_xlim(0.0, 1.0)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def compute_calibration_bins(
+    confidences: list[float],
+    correct_flags: list[bool],
+    n_bins: int,
+) -> list[dict[str, float | int]]:
+    if n_bins <= 0:
+        raise ValueError(f"--calibration-bins must be > 0, got {n_bins}")
+
+    conf = np.asarray(confidences, dtype=np.float64)
+    corr = np.asarray(correct_flags, dtype=np.float64)
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_ids = np.digitize(conf, edges[1:-1], right=False)
+
+    stats: list[dict[str, float | int]] = []
+    for i in range(n_bins):
+        mask = bin_ids == i
+        count = int(np.sum(mask))
+        if count > 0:
+            mean_conf = float(np.mean(conf[mask]))
+            emp_acc = float(np.mean(corr[mask]))
+        else:
+            mean_conf = 0.0
+            emp_acc = 0.0
+        stats.append(
+            {
+                "bin_lower": float(edges[i]),
+                "bin_upper": float(edges[i + 1]),
+                "count": count,
+                "mean_confidence": mean_conf,
+                "empirical_accuracy": emp_acc,
+            }
+        )
+    return stats
+
+
+def save_calibration_plot(bin_stats: list[dict[str, float | int]], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    xs = [float(stat["mean_confidence"]) for stat in bin_stats if int(stat["count"]) > 0]
+    ys = [float(stat["empirical_accuracy"]) for stat in bin_stats if int(stat["count"]) > 0]
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", color="gray", label="Perfect calibration")
+    if xs:
+        ax.plot(xs, ys, marker="o", color="tab:blue", label="Model")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("mean confidence")
+    ax.set_ylabel("empirical accuracy")
+    ax.set_title("Calibration Plot")
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
 
 
 def set_seed(seed: int) -> None:
@@ -471,17 +729,15 @@ def predict(
     loader: DataLoader,
     device: torch.device,
     idx_map: dict[int, str],
-    top_k: int,
+    topk_values: list[int],
     output_probs: bool,
     amp_enabled: bool,
     verbose: bool,
 ) -> tuple[
     list[dict[str, str]],
-    float,
-    float | None,
     dict[str, dict[str, int]],
     dict[str, dict[str, int]],
-    float,
+    dict[str, Any],
 ]:
     rows_out: list[dict[str, str]] = []
     aa_labels = canonical_aa_labels()
@@ -489,10 +745,13 @@ def predict(
     aa_confusion = init_confusion(aa_labels)
     aa_type_confusion = init_confusion(aa_types)
 
-    correct_top1 = 0
-    correct_topk = 0
-    correct_type = 0
     with_actual = 0
+    topk_hit_counts = {k: 0 for k in topk_values}
+    eval_actual_labels: list[str] = []
+    eval_predicted_labels: list[str] = []
+    eval_confidences: list[float] = []
+    eval_correct_flags: list[bool] = []
+    correct_type = 0
 
     model.eval()
     with torch.inference_mode():
@@ -504,9 +763,8 @@ def predict(
 
             probs = F.softmax(logits, dim=1)
             preds = torch.argmax(logits, dim=1)
-
-            k = max(1, min(top_k, probs.shape[1]))
-            topk_probs, topk_indices = torch.topk(probs, k=k, dim=1)
+            max_k = min(max(topk_values), probs.shape[1])
+            topk_probs, topk_indices = torch.topk(probs, k=max_k, dim=1)
 
             pred_indices = preds.detach().cpu().numpy().astype(int)
             topk_indices_np = topk_indices.detach().cpu().numpy().astype(int)
@@ -524,11 +782,16 @@ def predict(
 
                 if actual_idx is not None:
                     with_actual += 1
-                    correct_top1 += int(pred_idx == actual_idx)
-                    correct_topk += int(actual_idx in topk_indices_np[i])
                     correct_type += int(predicted_type == actual_type)
+                    hits = compute_topk_hits(actual_idx, topk_indices_np[i], topk_values)
+                    for k, hit in hits.items():
+                        topk_hit_counts[k] += hit
                     update_confusion(aa_confusion, aa_labels, actual_label, predicted_label)
                     update_confusion(aa_type_confusion, aa_types, actual_type, predicted_type)
+                    eval_actual_labels.append(actual_label)
+                    eval_predicted_labels.append(predicted_label)
+                    eval_confidences.append(float(topk_probs_np[i][0]))
+                    eval_correct_flags.append(pred_idx == actual_idx)
 
                 out_row = {
                     "structure_name": infer_structure_name(row, sample_path),
@@ -556,10 +819,23 @@ def predict(
 
                 rows_out.append(out_row)
 
-    accuracy = (correct_top1 / with_actual) if with_actual > 0 else float("nan")
-    topk_accuracy = (correct_topk / with_actual) if with_actual > 0 else None
     type_accuracy = (correct_type / with_actual) if with_actual > 0 else float("nan")
-    return rows_out, accuracy, topk_accuracy, aa_confusion, aa_type_confusion, type_accuracy
+    topk_accuracy = {
+        k: ((topk_hit_counts[k] / with_actual) if with_actual > 0 else None)
+        for k in topk_values
+    }
+    summary = {
+        "total_samples": len(rows_out),
+        "labeled_samples": with_actual,
+        "topk_accuracy": topk_accuracy,
+        "amino_acid_accuracy": topk_accuracy.get(1, None),
+        "amino_acid_type_accuracy": type_accuracy,
+        "actual_labels": eval_actual_labels,
+        "predicted_labels": eval_predicted_labels,
+        "confidences": eval_confidences,
+        "correct_flags": eval_correct_flags,
+    }
+    return rows_out, aa_confusion, aa_type_confusion, summary
 
 
 def main() -> None:
@@ -598,12 +874,17 @@ def main() -> None:
         collate_fn=collate_prediction_batch,
     )
 
-    rows_out, accuracy, topk_accuracy, aa_confusion, aa_type_confusion, type_accuracy = predict(
+    parsed_topk_values = parse_topk_values(args.topk_values)
+    if args.top_k > 1 and args.top_k not in parsed_topk_values:
+        parsed_topk_values.append(args.top_k)
+    parsed_topk_values = sorted(set(parsed_topk_values))
+
+    rows_out, aa_confusion, aa_type_confusion, summary = predict(
         model=model,
         loader=loader,
         device=device,
         idx_map=idx_map,
-        top_k=args.top_k,
+        topk_values=parsed_topk_values,
         output_probs=args.output_probs,
         amp_enabled=args.amp and device.type == "cuda",
         verbose=args.verbose,
@@ -629,6 +910,14 @@ def main() -> None:
     aa_type_confusion_png = args.aa_type_confusion_png or (
         output_parent / f"{output_stem}_aa_type_confusion.png"
     )
+    per_class_metrics_csv = args.per_class_metrics_csv or (
+        output_parent / f"{output_stem}_per_class_metrics.csv"
+    )
+    confusions_csv = args.confusions_csv or (output_parent / f"{output_stem}_common_confusions.csv")
+    confidence_hist_png = args.confidence_hist_png or (
+        output_parent / f"{output_stem}_confidence_hist.png"
+    )
+    calibration_png = args.calibration_png or (output_parent / f"{output_stem}_calibration.png")
 
     aa_labels = canonical_aa_labels()
     aa_type_labels = list(CANONICAL_AA_TYPES)
@@ -655,22 +944,56 @@ def main() -> None:
         normalize_mode=args.normalize_confusion,
     )
 
-    print(f"Total samples: {len(rows_out)}")
-    if np.isfinite(accuracy):
-        print(f"Amino acid accuracy: {accuracy:.4f}")
-    else:
-        print("Amino acid accuracy: N/A (no ground-truth labels available)")
+    metrics_rows, macro_avg, weighted_avg = compute_per_class_metrics(
+        actual_labels=summary["actual_labels"],
+        predicted_labels=summary["predicted_labels"],
+        class_labels=aa_labels,
+    )
+    write_per_class_metrics_csv(metrics_rows, macro_avg, weighted_avg, per_class_metrics_csv)
 
-    if np.isfinite(type_accuracy):
-        print(f"Amino acid type accuracy: {type_accuracy:.4f}")
+    common_confusions = compute_common_confusions(
+        actual_labels=summary["actual_labels"],
+        predicted_labels=summary["predicted_labels"],
+    )
+    write_common_confusions_csv(common_confusions, confusions_csv, args.max_confusions)
+
+    if summary["labeled_samples"] > 0:
+        save_confidence_histogram(summary["confidences"], summary["correct_flags"], confidence_hist_png)
+        calibration_bins = compute_calibration_bins(
+            summary["confidences"],
+            summary["correct_flags"],
+            args.calibration_bins,
+        )
+        save_calibration_plot(calibration_bins, calibration_png)
+
+    print(f"Total samples: {summary['total_samples']}")
+    print(f"Labeled samples used for evaluation: {summary['labeled_samples']}")
+    top1_accuracy = summary["topk_accuracy"].get(1)
+    if top1_accuracy is not None:
+        print(f"Top-1 accuracy: {top1_accuracy:.4f}")
+    else:
+        print("Top-1 accuracy: N/A (no ground-truth labels available)")
+
+    for k in (3, 5):
+        if k in summary["topk_accuracy"]:
+            if summary["topk_accuracy"][k] is not None:
+                print(f"Top-{k} accuracy: {summary['topk_accuracy'][k]:.4f}")
+            else:
+                print(f"Top-{k} accuracy: N/A (no ground-truth labels available)")
+
+    if np.isfinite(summary["amino_acid_type_accuracy"]):
+        print(f"Amino acid type accuracy: {summary['amino_acid_type_accuracy']:.4f}")
     else:
         print("Amino acid type accuracy: N/A (no ground-truth labels available)")
 
-    if args.top_k > 1:
-        if topk_accuracy is not None:
-            print(f"Top-{args.top_k} accuracy: {topk_accuracy:.4f}")
-        else:
-            print(f"Top-{args.top_k} accuracy: N/A (no ground-truth labels available)")
+    print(
+        "Macro precision / recall / F1: "
+        f"{macro_avg['precision']:.4f} / {macro_avg['recall']:.4f} / {macro_avg['f1']:.4f}"
+    )
+    print(
+        "Weighted precision / recall / F1: "
+        f"{weighted_avg['precision']:.4f} / {weighted_avg['recall']:.4f} / {weighted_avg['f1']:.4f}"
+    )
 
 
 if __name__ == "__main__":
