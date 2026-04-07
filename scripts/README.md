@@ -265,23 +265,6 @@ Useful extras:
 - `--fail-fast`
 - `--output-json`
 
-## 9. add_solvent_accessibility_to_predictions.py
-
-Motivation are higher solvent accessible residues are harder to predict than less solvently accessible residues since there are less microenviroment constraints for residues exposed to the solvent? Given the residue-identity prediction CSV (for example `predictions_test.csv`). Compute solvent accessibility only for the residues present in the test set / predictions. Outputs an appended solvent accessibility columns to the predictions CSV and a plot with solvent accessibility bins. 
-
-Example:
-
-    python scripts/add_solvent_accessibility_to_predictions.py \
-      --predictions-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions.csv \
-      --test-manifest ../alpha_amylase/splits/test_sites.csv \
-      --pdb-root ../alpha_amylase/pdbs \
-      --output-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_with_sasa.csv \
-      --plot-png ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_sasa_accuracy.png \
-      --sasa-kind relative \
-      --sasa-field total \
-      --binning equal_width \
-      --num-bins 10
-
 ## Extras:
 
 ## `check_split_leakage.py`
@@ -304,7 +287,7 @@ Useful extras:
 - `--json-out outputs/reports/split_leakage.json`
 
 
-## `build_activity_dataset.py`
+## 1. `build_activity_dataset.py`
 
 Activity-focused dataset builder separated from pretraining.
 
@@ -332,7 +315,7 @@ python scripts/build_activity_dataset.py \
   --task regression
 ```
 
-## `predict_residue_identity.py`
+## 2. `predict_residue_identity.py`
 
 Run inference for residue identity from a trained voxel CNN checkpoint and write predictions to CSV.
 
@@ -366,6 +349,23 @@ Useful extras:
 - `--output-probs`
 - `--verbose`
 
-## `constants.py`
+## 3. add_solvent_accessibility_to_predictions.py
+
+Motivation are higher solvent accessible residues are harder to predict than less solvently accessible residues since there are less microenviroment constraints for residues exposed to the solvent? Given the residue-identity prediction CSV (for example `predictions_test.csv`). Compute solvent accessibility only for the residues present in the test set / predictions. Outputs an appended solvent accessibility columns to the predictions CSV and a plot with solvent accessibility bins. 
+
+Example:
+
+    python scripts/add_solvent_accessibility_to_predictions.py \
+      --predictions-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions.csv \
+      --test-manifest ../alpha_amylase/splits/test_sites.csv \
+      --pdb-root ../alpha_amylase/pdbs \
+      --output-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_with_sasa.csv \
+      --plot-png ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_sasa_accuracy.png \
+      --sasa-kind relative \
+      --sasa-field total \
+      --binning equal_width \
+      --num-bins 10
+
+## 4. `constants.py`
 
 Shared constants imported by evaluation/analysis code (for example, residue label-to-group mappings used by `evaluate_model.py`).
