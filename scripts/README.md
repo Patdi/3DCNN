@@ -356,11 +356,11 @@ Motivation are higher solvent accessible residues are harder to predict than les
 Example:
 
     python scripts/add_solvent_accessibility_to_predictions.py \
-      --predictions-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions.csv \
-      --test-manifest ../alpha_amylase/splits/test_sites.csv \
-      --pdb-root ../alpha_amylase/pdbs \
-      --output-csv ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_with_sasa.csv \
-      --plot-png ../alpha_amylase/outputs/runs/voxel_cnn_pretrain/test_predictions_sasa_accuracy.png \
+      --predictions-csv ../data/outputs/runs/voxel_cnn_pretrain/test_predictions.csv \
+      --test-manifest ../data/splits/test_sites.csv \
+      --pdb-root ../data/pdbs \
+      --output-csv ../data/outputs/runs/voxel_cnn_pretrain/test_predictions_with_sasa.csv \
+      --plot-png ../data/outputs/runs/voxel_cnn_pretrain/test_predictions_sasa_accuracy.png \
       --sasa-kind relative \
       --sasa-field total \
       --binning equal_width \
