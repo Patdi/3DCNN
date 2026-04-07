@@ -19,6 +19,67 @@ from tqdm import tqdm
 from models.cnn3d import CNN3DConfig, VoxelCNN3D
 from protein_constants import LABEL_RES_DICT, LETTER1_3_DICT, RES_LABEL_DICT
 
+AMINO_ACID_PROPERTIES: dict[str, str] = {
+    # Positively Charged
+    "Arg": "Positively Charged",
+    "His": "Positively Charged",
+    "Lys": "Positively Charged",
+    # Negatively Charged
+    "Asp": "Negatively Charged",
+    "Glu": "Negatively Charged",
+    # Polar Uncharged
+    "Ser": "Polar Uncharged",
+    "Thr": "Polar Uncharged",
+    "Asn": "Polar Uncharged",
+    "Gln": "Polar Uncharged",
+    # Special Cases
+    "Cys": "Special Case",
+    "Sec": "Special Case",
+    "Gly": "Special Case",
+    "Pro": "Special Case",
+    # Hydrophobic
+    "Ala": "Hydrophobic",
+    "Val": "Hydrophobic",
+    "Ile": "Hydrophobic",
+    "Leu": "Hydrophobic",
+    "Met": "Hydrophobic",
+    "Phe": "Hydrophobic",
+    "Tyr": "Hydrophobic",
+    "Trp": "Hydrophobic",
+}
+
+CANONICAL_AA_LABELS = [
+    "Ala",
+    "Arg",
+    "Asn",
+    "Asp",
+    "Cys",
+    "Gln",
+    "Glu",
+    "Gly",
+    "His",
+    "Ile",
+    "Leu",
+    "Lys",
+    "Met",
+    "Phe",
+    "Pro",
+    "Ser",
+    "Thr",
+    "Trp",
+    "Tyr",
+    "Val",
+]
+
+CANONICAL_AA_TYPES = [
+    "Positively Charged",
+    "Negatively Charged",
+    "Polar Uncharged",
+    "Special Case",
+    "Hydrophobic",
+    "Unknown",
+]
+
 
 class PredictionManifestDataset(Dataset):
     """Manifest dataset compatible with train_voxel_cnn.py conventions."""
@@ -149,6 +210,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=1)
     parser.add_argument("--output-probs", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--aa-confusion-csv", type=Path, default=None)
+    parser.add_argument("--aa-type-confusion-csv", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -198,7 +261,61 @@ def build_model_from_checkpoint(
 
 
 def idx_to_residue_map() -> dict[int, str]:
-    return dict(LABEL_RES_DICT)
+    return {idx: canonicalize_aa_label(label) for idx, label in LABEL_RES_DICT.items()}
+
+
+def canonical_aa_labels() -> list[str]:
+    return list(CANONICAL_AA_LABELS)
+
+
+def canonicalize_aa_label(value: Any) -> str:
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+    if text == "":
+        return ""
+
+    upper_text = text.upper()
+    if len(upper_text) == 1 and upper_text in LETTER1_3_DICT:
+        upper_text = LETTER1_3_DICT[upper_text]
+    return upper_text[:1] + upper_text[1:].lower()
+
+
+def aa_type(label: str) -> str:
+    canonical = canonicalize_aa_label(label)
+    if canonical == "":
+        return "Unknown"
+    return AMINO_ACID_PROPERTIES.get(canonical, "Unknown")
+
+
+def init_confusion(labels: list[str]) -> dict[str, dict[str, int]]:
+    return {actual: {predicted: 0 for predicted in labels} for actual in labels}
+
+
+def update_confusion(
+    confusion: dict[str, dict[str, int]],
+    labels: list[str],
+    actual: str,
+    predicted: str,
+) -> None:
+    if actual not in confusion or predicted not in confusion[actual]:
+        return
+    confusion[actual][predicted] += 1
+
+
+def write_confusion_csv(
+    confusion: dict[str, dict[str, int]],
+    labels: list[str],
+    out_path: Path,
+    header_label: str,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow([header_label, *labels])
+        for actual in labels:
+            writer.writerow([actual, *[confusion[actual][predicted] for predicted in labels]])
 
 
 def label_to_index(label: str) -> int | None:
@@ -222,12 +339,12 @@ def normalize_residue_label(value: Any, idx_map: dict[int, str]) -> str:
 
     maybe_int = PredictionManifestDataset._maybe_parse_label(text)
     if maybe_int is not None:
-        return idx_map.get(int(maybe_int), str(maybe_int))
+        return idx_map.get(int(maybe_int), canonicalize_aa_label(str(maybe_int)))
 
     upper_text = text.upper()
     if len(upper_text) == 1 and upper_text in LETTER1_3_DICT:
-        return LETTER1_3_DICT[upper_text]
-    return upper_text
+        return canonicalize_aa_label(LETTER1_3_DICT[upper_text])
+    return canonicalize_aa_label(upper_text)
 
 
 def format_site(row: dict[str, str], sample_path: Path) -> str:
@@ -284,11 +401,23 @@ def predict(
     output_probs: bool,
     amp_enabled: bool,
     verbose: bool,
-) -> tuple[list[dict[str, str]], float, float | None]:
+) -> tuple[
+    list[dict[str, str]],
+    float,
+    float | None,
+    dict[str, dict[str, int]],
+    dict[str, dict[str, int]],
+    float,
+]:
     rows_out: list[dict[str, str]] = []
+    aa_labels = canonical_aa_labels()
+    aa_types = list(CANONICAL_AA_TYPES)
+    aa_confusion = init_confusion(aa_labels)
+    aa_type_confusion = init_confusion(aa_types)
 
     correct_top1 = 0
     correct_topk = 0
+    correct_type = 0
     with_actual = 0
 
     model.eval()
@@ -314,16 +443,26 @@ def predict(
                 sample_path = Path(batch["sample_paths"][i])
 
                 actual_idx = batch["actual_idx"][i]
+                predicted_label = idx_map.get(pred_idx, canonicalize_aa_label(str(pred_idx)))
+                predicted_type = aa_type(predicted_label)
+                actual_label = normalize_residue_label(actual_idx, idx_map) if actual_idx is not None else ""
+                actual_type = aa_type(actual_label) if actual_label else "Unknown"
+
                 if actual_idx is not None:
                     with_actual += 1
                     correct_top1 += int(pred_idx == actual_idx)
                     correct_topk += int(actual_idx in topk_indices_np[i])
+                    correct_type += int(predicted_type == actual_type)
+                    update_confusion(aa_confusion, aa_labels, actual_label, predicted_label)
+                    update_confusion(aa_type_confusion, aa_types, actual_type, predicted_type)
 
                 out_row = {
                     "structure_name": infer_structure_name(row, sample_path),
                     "site": format_site(row, sample_path),
-                    "predicted": idx_map.get(pred_idx, str(pred_idx)),
-                    "actual": normalize_residue_label(actual_idx, idx_map),
+                    "predicted": predicted_label,
+                    "actual": actual_label,
+                    "predicted_type": predicted_type,
+                    "actual_type": actual_type,
                 }
 
                 if output_probs:
@@ -345,7 +484,8 @@ def predict(
 
     accuracy = (correct_top1 / with_actual) if with_actual > 0 else float("nan")
     topk_accuracy = (correct_topk / with_actual) if with_actual > 0 else None
-    return rows_out, accuracy, topk_accuracy
+    type_accuracy = (correct_type / with_actual) if with_actual > 0 else float("nan")
+    return rows_out, accuracy, topk_accuracy, aa_confusion, aa_type_confusion, type_accuracy
 
 
 def main() -> None:
@@ -384,7 +524,7 @@ def main() -> None:
         collate_fn=collate_prediction_batch,
     )
 
-    rows_out, accuracy, topk_accuracy = predict(
+    rows_out, accuracy, topk_accuracy, aa_confusion, aa_type_confusion, type_accuracy = predict(
         model=model,
         loader=loader,
         device=device,
@@ -396,7 +536,7 @@ def main() -> None:
     )
 
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["structure_name", "site", "predicted", "actual"]
+    fieldnames = ["structure_name", "site", "predicted", "actual", "predicted_type", "actual_type"]
     if args.output_probs:
         fieldnames.extend(["predicted_index", "actual_index", "confidence", "topk_indices", "topk_labels"])
 
@@ -405,11 +545,31 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows_out)
 
-    print(f"Processed samples: {len(rows_out)}")
+    output_stem = args.output_csv.stem
+    output_parent = args.output_csv.parent
+    aa_confusion_csv = args.aa_confusion_csv or (output_parent / f"{output_stem}_aa_confusion.csv")
+    aa_type_confusion_csv = args.aa_type_confusion_csv or (
+        output_parent / f"{output_stem}_aa_type_confusion.csv"
+    )
+
+    write_confusion_csv(aa_confusion, canonical_aa_labels(), aa_confusion_csv, "actual/predicted")
+    write_confusion_csv(
+        aa_type_confusion,
+        list(CANONICAL_AA_TYPES),
+        aa_type_confusion_csv,
+        "actual_type/predicted_type",
+    )
+
+    print(f"Total samples: {len(rows_out)}")
     if np.isfinite(accuracy):
-        print(f"Accuracy: {accuracy:.4f}")
+        print(f"Amino acid accuracy: {accuracy:.4f}")
     else:
-        print("Accuracy: N/A (no ground-truth labels available)")
+        print("Amino acid accuracy: N/A (no ground-truth labels available)")
+
+    if np.isfinite(type_accuracy):
+        print(f"Amino acid type accuracy: {type_accuracy:.4f}")
+    else:
+        print("Amino acid type accuracy: N/A (no ground-truth labels available)")
 
     if args.top_k > 1:
         if topk_accuracy is not None:
