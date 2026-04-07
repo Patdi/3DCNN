@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pdb-root", required=True, type=Path)
     parser.add_argument("--output-csv", required=True, type=Path)
     parser.add_argument("--plot-png", required=True, type=Path)
-    parser.add_argument("--plot-mode", choices=["line", "boxplot"], default="boxplot")
+    parser.add_argument("--plot-mode", choices=["line", "grouped_boxplot"], default="grouped_boxplot")
 
     parser.add_argument("--sasa-kind", choices=["absolute", "relative"], default="relative")
     parser.add_argument(
@@ -329,15 +329,26 @@ def save_accuracy_plot(
     plt.close()
 
 
-def build_sasa_correctness_groups(rows: Sequence[dict]) -> Tuple[List[List[float]], List[str]]:
-    groups = {
-        "top1_correct": [],
-        "top1_incorrect": [],
-        "top3_correct": [],
-        "top3_incorrect": [],
-        "top5_correct": [],
-        "top5_incorrect": [],
+def format_bin_labels(bin_edges: np.ndarray) -> List[str]:
+    labels = []
+    for i in range(len(bin_edges) - 1):
+        labels.append(f"[{bin_edges[i]:.2f}, {bin_edges[i + 1]:.2f})")
+    return labels
+
+
+def build_grouped_correctness_by_bin(
+    rows: Sequence[dict], bin_edges: np.ndarray
+) -> Tuple[Dict[str, Dict[str, List[int]]], List[str], List[int]]:
+    bin_labels = format_bin_labels(bin_edges)
+    grouped = {
+        label: {
+            "top1": [],
+            "top3": [],
+            "top5": [],
+        }
+        for label in bin_labels
     }
+    supports = [0] * len(bin_labels)
 
     for row in rows:
         val = row.get("sasa_selected")
@@ -347,71 +358,86 @@ def build_sasa_correctness_groups(rows: Sequence[dict]) -> Tuple[List[List[float
             continue
 
         sasa_value = float(val)
-        topk = parse_topk_labels(row.get("topk_labels") or "")
-
-        top1_correct = predicted == actual
-        top3_correct = actual in topk[:3]
-        top5_correct = actual in topk[:5]
-
-        groups["top1_correct" if top1_correct else "top1_incorrect"].append(sasa_value)
-        groups["top3_correct" if top3_correct else "top3_incorrect"].append(sasa_value)
-        groups["top5_correct" if top5_correct else "top5_incorrect"].append(sasa_value)
-
-    ordered_keys = [
-        "top1_correct",
-        "top1_incorrect",
-        "top3_correct",
-        "top3_incorrect",
-        "top5_correct",
-        "top5_incorrect",
-    ]
-    label_prefixes = [
-        "Top1 Correct",
-        "Top1 Incorrect",
-        "Top3 Correct",
-        "Top3 Incorrect",
-        "Top5 Correct",
-        "Top5 Incorrect",
-    ]
-    ordered_groups = [groups[key] for key in ordered_keys]
-    labels = [f"{prefix} (n={len(group)})" for prefix, group in zip(label_prefixes, ordered_groups)]
-    return ordered_groups, labels
-
-
-def save_sasa_boxplot(groups: Sequence[Sequence[float]], labels: Sequence[str], out_path: Path) -> None:
-    plt.figure(figsize=(12, 6))
-    positions = []
-    data = []
-    valid_labels = []
-    colors = []
-
-    for idx, (group, label) in enumerate(zip(groups, labels), start=1):
-        if not group:
-            print(f"[WARN] No samples for group '{label}', skipping.")
+        idx = np.searchsorted(bin_edges, sasa_value, side="right") - 1
+        if idx == len(bin_edges) - 1:
+            idx = len(bin_edges) - 2
+        if idx < 0 or idx >= len(bin_labels):
             continue
-        positions.append(idx)
-        data.append(group)
-        valid_labels.append(label)
-        colors.append("#4CAF50" if "Correct" in label else "#F44336")
 
-    if not data:
-        raise ValueError("No groups with samples available for boxplot.")
+        topk = parse_topk_labels(row.get("topk_labels") or "")
+        top1_correct = int(predicted == actual)
+        top3_correct = int(actual in topk[:3])
+        top5_correct = int(actual in topk[:5])
 
-    box = plt.boxplot(data, positions=positions, labels=valid_labels, patch_artist=True, showfliers=False)
-    for patch, color in zip(box["boxes"], colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.6)
+        label = bin_labels[idx]
+        grouped[label]["top1"].append(top1_correct)
+        grouped[label]["top3"].append(top3_correct)
+        grouped[label]["top5"].append(top5_correct)
+        supports[idx] += 1
 
-    plt.title("Solvent Accessibility Distribution by Prediction Accuracy")
-    plt.xlabel("Prediction Group")
-    plt.ylabel("Solvent Accessibility")
-    plt.xticks(rotation=30, ha="right")
-    plt.grid(axis="y", alpha=0.25)
-    plt.tight_layout()
+    return grouped, bin_labels, supports
 
+
+def save_grouped_correctness_boxplot(
+    bin_to_metric_values: Dict[str, Dict[str, List[int]]],
+    bin_labels: Sequence[str],
+    supports: Sequence[int],
+    out_path: Path,
+) -> None:
+    metrics = ["top1", "top3", "top5"]
+    colors = {"top1": "#F44336", "top3": "#4CAF50", "top5": "#2196F3"}
+    offsets = {"top1": -0.25, "top3": 0.0, "top5": 0.25}
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    centers = np.arange(1, len(bin_labels) + 1, dtype=float)
+    legend_handles = []
+
+    for metric in metrics:
+        metric_data = []
+        metric_positions = []
+        for center, bin_label in zip(centers, bin_labels):
+            values = bin_to_metric_values[bin_label][metric]
+            if not values:
+                continue
+            metric_data.append(values)
+            metric_positions.append(center + offsets[metric])
+
+        if not metric_data:
+            continue
+
+        box = ax.boxplot(
+            metric_data,
+            positions=metric_positions,
+            widths=0.22,
+            patch_artist=True,
+            showfliers=False,
+        )
+        for patch in box["boxes"]:
+            patch.set_facecolor(colors[metric])
+            patch.set_alpha(0.65)
+        for median in box["medians"]:
+            median.set_color("black")
+
+        legend_handles.append(plt.Rectangle((0, 0), 1, 1, facecolor=colors[metric], alpha=0.65, label=metric))
+
+    ax.set_title("Prediction Correctness by Solvent Accessibility Bin")
+    ax.set_xlabel("Solvent Accessibility Bin")
+    ax.set_ylabel("Correctness (0/1)")
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xticks(centers)
+    ax.set_xticklabels(bin_labels, rotation=45, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+
+    if legend_handles:
+        ax.legend(handles=legend_handles, title="Metric")
+
+    for center, support in zip(centers, supports):
+        ax.text(center, -0.08, f"n={support}", ha="center", va="top", fontsize=8, alpha=0.75)
+
+    fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_path, dpi=200)
-    plt.close()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
 
 
 def write_augmented_predictions_csv(rows: Sequence[dict], output_csv: Path, original_fields: Sequence[str]) -> None:
@@ -599,8 +625,8 @@ def main() -> None:
     if args.plot_mode == "line":
         save_accuracy_plot(binned, bin_edges, args.plot_png, args.sasa_kind, args.sasa_field)
     else:
-        groups, labels = build_sasa_correctness_groups(rows_for_bins)
-        save_sasa_boxplot(groups, labels, args.plot_png)
+        grouped, bin_labels, supports = build_grouped_correctness_by_bin(rows_for_bins, bin_edges)
+        save_grouped_correctness_boxplot(grouped, bin_labels, supports, args.plot_png)
 
     if args.summary_json:
         summary = {
@@ -615,6 +641,7 @@ def main() -> None:
                 "sasa_kind": args.sasa_kind,
                 "sasa_field": args.sasa_field,
             },
+            "plot_mode": args.plot_mode,
             "binning": {
                 "mode": args.binning,
                 "num_bins": args.num_bins,
