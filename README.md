@@ -78,7 +78,7 @@ Planned/desired next steps include:
 
 ## Current status
 
-The repository already contains:
+Repository contains:
 
 - A modern PyTorch baseline model.
 - A modular data preparation and voxelization pipeline.
