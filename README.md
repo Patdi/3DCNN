@@ -4,7 +4,7 @@ Modernized 3D convolutional neural network tooling for residue-level protein mic
 
 ## Overview
 
-This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized local protein environments and amino-acid environment similarity style learning. The codebase keeps the original 3D CNN spirit while replacing legacy training/data plumbing with maintainable Python + PyTorch workflows. Based on work by **Kulikova et al. (2021)** box sizes of 12 Å are equivalent to the orginal 20 Å reported by **Torng & Altman (2017)** and should greatly reduce the voxel database size. 
+This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized local protein environments and amino-acid environment similarity style learning. The codebase keeps the original 3D CNN spirit while replacing legacy training/data workflows. Note based on work by **Kulikova et al. (2021)** box sizes of 12 Å are equivalent to the orginal 20 Å reported by **Torng & Altman (2017)** and should greatly reduce the voxel database size. 
 
 In addition to the original atom-channel setup, the project will eventually support additional biochemical channels commonly used in structure-based protein engineering workflows (including **hydrogen**, **partial charges**, and **solvent accessibility**) as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
 
@@ -83,5 +83,3 @@ The repository already contains:
 - A modern PyTorch baseline model.
 - A modular data preparation and voxelization pipeline.
 - Train/eval CLIs and supporting quality-control scripts.
-
-The repository is therefore ready for iterative feature expansion around richer channels, mutation-centric supervision, and architecture experimentation.
