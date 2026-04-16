@@ -6,7 +6,7 @@ Modernized 3D convolutional neural network tooling for residue-level protein mic
 
 This repository is a modern rewrite of **Torng & Altman (2017)** for voxelized local protein environments and amino-acid environment similarity style learning. The codebase keeps the original 3D CNN spirit while replacing legacy training/data workflows. Note based on work by **Kulikova et al. (2021)** box sizes of 12 Å are equivalent to the orginal 20 Å reported by **Torng & Altman (2017)** and should greatly reduce the voxel database size. 
 
-In addition to the original atom-channel setup, the project will eventually support additional biochemical channels commonly used in structure-based protein engineering workflows (including **hydrogen**, **partial charges**, and **solvent accessibility**) as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
+In addition to the original atom-channel setup, the project will eventually support additional biochemical channels including **hydrogen**, **partial charges**, and **solvent accessibility** as described by **Shroff et al. (2019)** and used in later work such as **Shroff et al. (2020)** and **Kulikova et al. (2021)**.
 
 > Original Torng et al. code repository: (http://archive.simtk.org/wtorng/)
 
